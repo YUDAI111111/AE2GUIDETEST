@@ -1,17 +1,12 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-/*
-  AE2 ME Controller (original-look web demo)
-  - shell: lit (StandardMaterial)
-  - lights: self-lit (BasicMaterial), subtle
-  - smooth interpolate via continuous UV offset
-*/
-
+// Jar-like animation (NO scrolling UV). Fade between frames (interpolate:true).
 const TICKS_PER_SECOND = 20;
 const FRAME_TIME_TICKS = 25; // matches controller_lights.png.mcmeta
 const FRAME_TIME_MS = (FRAME_TIME_TICKS / TICKS_PER_SECOND) * 1000;
-const FRAME_HEIGHT = 16;
+const FRAME_W = 16;
+const FRAME_H = 16;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x111111);
@@ -24,7 +19,7 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(window.devicePixelRatio);
 document.body.appendChild(renderer.domElement);
 
-// Lighting (kept similar to the very first demo)
+// minimal lighting for shell
 scene.add(new THREE.AmbientLight(0xffffff, 0.7));
 const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
 dirLight.position.set(5, 8, 6);
@@ -34,6 +29,7 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 
 const geometry = new THREE.BoxGeometry(1, 1, 1);
+
 const loader = new THREE.TextureLoader();
 
 const shellTexture = loader.load("./assets/controller.png", (t) => {
@@ -41,24 +37,28 @@ const shellTexture = loader.load("./assets/controller.png", (t) => {
   t.minFilter = THREE.NearestFilter;
 });
 
-const lightsTexture = loader.load("./assets/controller_lights.png", (t) => {
+const sheetTexture = loader.load("./assets/controller_lights.png", (t) => {
   t.magFilter = THREE.NearestFilter;
   t.minFilter = THREE.NearestFilter;
   t.wrapS = THREE.ClampToEdgeWrapping;
-  t.wrapT = THREE.RepeatWrapping;
+  t.wrapT = THREE.ClampToEdgeWrapping;
 });
 
-const shellMaterial = new THREE.MeshStandardMaterial({
-  map: shellTexture,
-  side: THREE.DoubleSide
-});
+// canvas for single 16x16 frame output
+const canvas = document.createElement("canvas");
+canvas.width = FRAME_W;
+canvas.height = FRAME_H;
+const ctx = canvas.getContext("2d", { alpha: true });
+ctx.imageSmoothingEnabled = false;
 
-const lightsMaterial = new THREE.MeshBasicMaterial({
-  map: lightsTexture,
-  transparent: true,
-  opacity: 0.9,
-  side: THREE.DoubleSide
-});
+const lightsTexture = new THREE.CanvasTexture(canvas);
+lightsTexture.magFilter = THREE.NearestFilter;
+lightsTexture.minFilter = THREE.NearestFilter;
+lightsTexture.wrapS = THREE.ClampToEdgeWrapping;
+lightsTexture.wrapT = THREE.ClampToEdgeWrapping;
+
+const shellMaterial = new THREE.MeshStandardMaterial({ map: shellTexture, side: THREE.DoubleSide });
+const lightsMaterial = new THREE.MeshBasicMaterial({ map: lightsTexture, transparent: true, opacity: 0.9, side: THREE.DoubleSide });
 
 const shellMesh = new THREE.Mesh(geometry, shellMaterial);
 scene.add(shellMesh);
@@ -66,27 +66,45 @@ scene.add(shellMesh);
 const lightsMesh = new THREE.Mesh(geometry, lightsMaterial);
 scene.add(lightsMesh);
 
+let sheetImage = null;
+let frameCount = 0;
+
+function ensureSheetReady() {
+  if (!sheetTexture.image) return false;
+  if (sheetImage) return true;
+  sheetImage = sheetTexture.image;
+  frameCount = Math.floor(sheetImage.height / FRAME_H);
+  return frameCount > 0;
+}
+
+function drawFrame(frameIndex, alpha) {
+  const sy = frameIndex * FRAME_H;
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(sheetImage, 0, sy, FRAME_W, FRAME_H, 0, 0, FRAME_W, FRAME_H);
+}
+
 const startTime = performance.now();
 
-function updateLightsAnimation() {
-  if (!lightsTexture.image) return;
-
-  const frameCount = lightsTexture.image.height / FRAME_HEIGHT;
-
-  // initialize repeat once
-  if (lightsTexture.repeat.y === 1) {
-    lightsTexture.repeat.set(1, 1 / frameCount);
-  }
+function updateLights() {
+  if (!ensureSheetReady()) return;
 
   const elapsed = performance.now() - startTime;
-  const exactFrame = (elapsed / FRAME_TIME_MS) % frameCount;
+  const t = (elapsed / FRAME_TIME_MS) % frameCount;
 
-  // smooth interpolate: continuous UV offset across stacked frames
-  lightsTexture.offset.y = exactFrame / frameCount;
+  const base = Math.floor(t);
+  const frac = t - base;
+  const next = (base + 1) % frameCount;
+
+  ctx.clearRect(0, 0, FRAME_W, FRAME_H);
+  drawFrame(base, 1.0 - frac);
+  drawFrame(next, frac);
+  ctx.globalAlpha = 1.0;
+
+  lightsTexture.needsUpdate = true;
 }
 
 function render() {
-  updateLightsAnimation();
+  updateLights();
   controls.update();
   renderer.render(scene, camera);
   requestAnimationFrame(render);
