@@ -3,18 +3,13 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AE2 ME Controller (Online) - Web Demo</title>
+  <title>AE2 ME Controller (Online) - Web Preview</title>
   <link rel="icon" href="data:,">
   <style>
-    html, body { margin:0; height:100%; background:#111; overflow:hidden; }
-    #hud {
-      position: fixed; left: 12px; top: 12px;
-      color: #ddd; font: 13px/1.4 system-ui, -apple-system, Segoe UI, sans-serif;
-      background: rgba(0,0,0,.45); padding: 10px 12px; border-radius: 8px;
-      user-select: none;
-    }
-    #hud .ok { color: #9fe89f; }
-    #hud .err { color: #ff9c9c; }
+    html, body { height: 100%; margin: 0; background: #111; overflow: hidden; }
+    #hud { position: fixed; left: 12px; top: 10px; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; color: #ddd; background: rgba(0,0,0,.35); padding: 8px 10px; border-radius: 8px; }
+    #hud .ok { color: #7CFC90; font-weight: 700; }
+    #hud .err { color: #ff6b6b; font-weight: 700; }
   </style>
 
   <script type="importmap">
