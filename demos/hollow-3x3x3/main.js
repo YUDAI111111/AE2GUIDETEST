@@ -3,7 +3,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 // ===== Settings =====
 const GRID_SIZE = 3;               // 3x3x3
-const SPACING = 1.05;              // slight gap to avoid z-fighting
+const SPACING = 1.0;               // no visible gaps between blocks
 const FRAME_MS = (12/20)*1000;     // lights smooth speed (only affects lights crossfade + inside toggle)
 const BASE_EMISSIVE = 0.35;        // guide-look: make powered base look "on"
 const INSIDE_EMISSIVE = 0.45;
@@ -128,15 +128,20 @@ function makeLightsLayer(sheetTexture){
 
   const matA = new THREE.MeshStandardMaterial({
     map: texA, emissiveMap: texA, emissive: new THREE.Color(0xffffff),
-    emissiveIntensity: LIGHTS_EMISSIVE, transparent:true, opacity:1
+    emissiveIntensity: LIGHTS_EMISSIVE, transparent:true, opacity:1,
+    depthWrite: false
   });
   const matB = new THREE.MeshStandardMaterial({
     map: texB, emissiveMap: texB, emissive: new THREE.Color(0xffffff),
-    emissiveIntensity: LIGHTS_EMISSIVE, transparent:true, opacity:0
+    emissiveIntensity: LIGHTS_EMISSIVE, transparent:true, opacity:0,
+    depthWrite: false
   });
 
   const meshA = new THREE.Mesh(baseGeo, matA);
   const meshB = new THREE.Mesh(baseGeo, matB);
+  // Slightly enlarge overlay to avoid z-fighting with the base cube
+  meshA.scale.setScalar(1.001);
+  meshB.scale.setScalar(1.001);
 
   return { sheetTexture, sheetImg:null, frames:1, ctxA, ctxB, texA, texB, matA, matB, meshA, meshB };
 }
@@ -169,6 +174,17 @@ function makeBlock(type){
 
   const group = new THREE.Group();
   group.add(baseMesh, lights.meshA, lights.meshB, insideMesh);
+
+  // Match AE2 blockstate rotations for column variants:
+  // column_y: no rotation
+  // column_z: x=90
+  // column_x: x=90, y=90
+  if(type === "column_z"){
+    group.rotation.x = Math.PI / 2;
+  }else if(type === "column_x"){
+    group.rotation.x = Math.PI / 2;
+    group.rotation.y = Math.PI / 2;
+  }
 
   return { group, baseMesh, lights, insideMesh };
 }
