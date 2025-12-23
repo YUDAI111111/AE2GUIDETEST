@@ -2,14 +2,15 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 /*
-  AE2 ME Controller Web Demo (STABLE)
-  - DoubleSide materials (fix backface culling)
-  - controller_powered + lights + mcmeta interpolate
-  - GitHub Pages compatible
+  AE2 ME Controller Web Demo (ONLINE - simplified inside)
+  - shell (powered)
+  - inside (emissive core)
+  - lights (mcmeta interpolate)
+  - DoubleSide materials (no face disappearing)
 */
 
 // =========================
-// Constants (mcmeta)
+// mcmeta constants
 // =========================
 const TICKS_PER_SECOND = 20;
 const FRAME_TIME_TICKS = 25;
@@ -33,7 +34,7 @@ const camera = new THREE.PerspectiveCamera(
   0.1,
   100
 );
-camera.position.set(2.5, 2.0, 2.5);
+camera.position.set(2.6, 2.1, 2.6);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -43,9 +44,9 @@ document.body.appendChild(renderer.domElement);
 // =========================
 // Lights
 // =========================
-scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 
-const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.7);
 dirLight.position.set(5, 10, 7);
 scene.add(dirLight);
 
@@ -56,16 +57,17 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 
 // =========================
-// Geometry (temporary cube)
+// Geometry
 // =========================
-const geometry = new THREE.BoxGeometry(1, 1, 1);
+const shellGeometry = new THREE.BoxGeometry(1, 1, 1);
+const insideGeometry = new THREE.BoxGeometry(0.78, 0.78, 0.78);
 
 // =========================
 // Textures
 // =========================
 const loader = new THREE.TextureLoader();
 
-const baseTexture = loader.load("./assets/controller_powered.png", (t) => {
+const shellTexture = loader.load("./assets/controller_powered.png", (t) => {
   t.magFilter = THREE.NearestFilter;
   t.minFilter = THREE.NearestFilter;
 });
@@ -78,10 +80,19 @@ const lightsTexture = loader.load("./assets/controller_lights.png", (t) => {
 });
 
 // =========================
-// Materials (DoubleSide FIX)
+// Materials
 // =========================
-const baseMaterial = new THREE.MeshStandardMaterial({
-  map: baseTexture,
+const shellMaterial = new THREE.MeshStandardMaterial({
+  map: shellTexture,
+  side: THREE.DoubleSide
+});
+
+const insideMaterial = new THREE.MeshStandardMaterial({
+  color: new THREE.Color(0xcfffff),
+  emissive: new THREE.Color(0x9ffcff),
+  emissiveIntensity: 1.2,
+  transparent: true,
+  opacity: 0.95,
   side: THREE.DoubleSide
 });
 
@@ -96,10 +107,14 @@ const lightsMaterial = new THREE.MeshStandardMaterial({
 // =========================
 // Meshes
 // =========================
-const baseMesh = new THREE.Mesh(geometry, baseMaterial);
-scene.add(baseMesh);
+const shellMesh = new THREE.Mesh(shellGeometry, shellMaterial);
+scene.add(shellMesh);
 
-const lightsMesh = new THREE.Mesh(geometry, lightsMaterial);
+const insideMesh = new THREE.Mesh(insideGeometry, insideMaterial);
+insideMesh.visible = isOnline;
+scene.add(insideMesh);
+
+const lightsMesh = new THREE.Mesh(shellGeometry, lightsMaterial);
 lightsMesh.visible = isOnline;
 scene.add(lightsMesh);
 
