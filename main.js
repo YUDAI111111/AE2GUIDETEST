@@ -1,8 +1,15 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
+/*
+  AE2 ME Controller (original-look web demo)
+  - shell: lit (StandardMaterial)
+  - lights: self-lit (BasicMaterial), subtle
+  - smooth interpolate via continuous UV offset
+*/
+
 const TICKS_PER_SECOND = 20;
-const FRAME_TIME_TICKS = 25;
+const FRAME_TIME_TICKS = 25; // matches controller_lights.png.mcmeta
 const FRAME_TIME_MS = (FRAME_TIME_TICKS / TICKS_PER_SECOND) * 1000;
 const FRAME_HEIGHT = 16;
 
@@ -17,6 +24,7 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(window.devicePixelRatio);
 document.body.appendChild(renderer.domElement);
 
+// Lighting (kept similar to the very first demo)
 scene.add(new THREE.AmbientLight(0xffffff, 0.7));
 const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
 dirLight.position.set(5, 8, 6);
@@ -28,18 +36,29 @@ controls.enableDamping = true;
 const geometry = new THREE.BoxGeometry(1, 1, 1);
 const loader = new THREE.TextureLoader();
 
-const shellTexture = loader.load("./assets/controller.png");
-shellTexture.magFilter = THREE.NearestFilter;
-shellTexture.minFilter = THREE.NearestFilter;
+const shellTexture = loader.load("./assets/controller.png", (t) => {
+  t.magFilter = THREE.NearestFilter;
+  t.minFilter = THREE.NearestFilter;
+});
 
-const lightsTexture = loader.load("./assets/controller_lights.png");
-lightsTexture.magFilter = THREE.NearestFilter;
-lightsTexture.minFilter = THREE.NearestFilter;
-lightsTexture.wrapS = THREE.ClampToEdgeWrapping;
-lightsTexture.wrapT = THREE.RepeatWrapping;
+const lightsTexture = loader.load("./assets/controller_lights.png", (t) => {
+  t.magFilter = THREE.NearestFilter;
+  t.minFilter = THREE.NearestFilter;
+  t.wrapS = THREE.ClampToEdgeWrapping;
+  t.wrapT = THREE.RepeatWrapping;
+});
 
-const shellMaterial = new THREE.MeshStandardMaterial({ map: shellTexture, side: THREE.DoubleSide });
-const lightsMaterial = new THREE.MeshBasicMaterial({ map: lightsTexture, transparent: true, side: THREE.DoubleSide });
+const shellMaterial = new THREE.MeshStandardMaterial({
+  map: shellTexture,
+  side: THREE.DoubleSide
+});
+
+const lightsMaterial = new THREE.MeshBasicMaterial({
+  map: lightsTexture,
+  transparent: true,
+  opacity: 0.9,
+  side: THREE.DoubleSide
+});
 
 const shellMesh = new THREE.Mesh(geometry, shellMaterial);
 scene.add(shellMesh);
@@ -49,19 +68,25 @@ scene.add(lightsMesh);
 
 const startTime = performance.now();
 
-function updateLights() {
+function updateLightsAnimation() {
   if (!lightsTexture.image) return;
+
   const frameCount = lightsTexture.image.height / FRAME_HEIGHT;
+
+  // initialize repeat once
   if (lightsTexture.repeat.y === 1) {
     lightsTexture.repeat.set(1, 1 / frameCount);
   }
+
   const elapsed = performance.now() - startTime;
   const exactFrame = (elapsed / FRAME_TIME_MS) % frameCount;
+
+  // smooth interpolate: continuous UV offset across stacked frames
   lightsTexture.offset.y = exactFrame / frameCount;
 }
 
 function render() {
-  updateLights();
+  updateLightsAnimation();
   controls.update();
   renderer.render(scene, camera);
   requestAnimationFrame(render);
