@@ -3,20 +3,29 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>AE2 ME Controller (Guide Look – Smooth Lights)</title>
-<script type="importmap">
-{
-  "imports": {
-    "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
-    "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/"
-  }
-}
-</script>
+<title>AE2 Controller Web Demos</title>
 <style>
-html,body{margin:0;padding:0;background:#111;overflow:hidden;}
+  html,body{margin:0;padding:0;background:#111;color:#eee;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:900px;margin:40px auto;padding:0 16px;}
+  a{color:#9ad;}
+  .card{background:#1b1b1b;border:1px solid #2a2a2a;border-radius:12px;padding:16px;margin:12px 0;}
+  h1{font-size:22px;margin:0 0 12px}
+  h2{font-size:18px;margin:0 0 6px}
+  p{margin:8px 0 0;line-height:1.5}
+  code{background:#222;padding:2px 6px;border-radius:6px}
 </style>
 </head>
 <body>
-<script type="module" src="./main.js"></script>
+  <div class="wrap">
+    <h1>AE2 Controller Web Demos</h1>
+    <div class="card">
+      <h2><a href="./demos/single/">Single Controller (Guide Look + Smooth Lights)</a></h2>
+      <p>単体 ME Controller。<code>controller_powered</code> をベースに、lights はクロスフェードで滑らか。</p>
+    </div>
+    <div class="card">
+      <h2><a href="./demos/hollow-3x3x3/">Hollow 3×3×3 (Face Centers + Core Hollow)</a></h2>
+      <p>3×3×3 シェル（面中央6点 + 中心1点が空洞）。隣接判定で <code>block</code> / <code>column_x/y/z</code> を切替。</p>
+    </div>
+  </div>
 </body>
 </html>
