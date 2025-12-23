@@ -74,7 +74,7 @@ const lightsMesh = new THREE.Mesh(baseGeo, lightsMat);
 const insideMesh = new THREE.Mesh(insideGeo, insideMat);
 scene.add(baseMesh, lightsMesh, insideMesh);
 
-const FRAME_MS = (8/20)*1000; // 約0.4秒
+const FRAME_MS = (1/20)*1000;
 let sheetImg=null;
 const start = performance.now();
 
