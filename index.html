@@ -1,28 +1,22 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AE2 ME Controller (Online) - Web Preview</title>
-  <link rel="icon" href="data:,">
-  <style>
-    html, body { height: 100%; margin: 0; background: #111; overflow: hidden; }
-    #hud { position: fixed; left: 12px; top: 10px; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; color: #ddd; background: rgba(0,0,0,.35); padding: 8px 10px; border-radius: 8px; }
-    #hud .ok { color: #7CFC90; font-weight: 700; }
-    #hud .err { color: #ff6b6b; font-weight: 700; }
-  </style>
-
+  <title>AE2 ME Controller Demo</title>
   <script type="importmap">
   {
     "imports": {
-      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/"
     }
   }
   </script>
+  <style>
+    html, body { margin:0; padding:0; background:#111; overflow:hidden; }
+  </style>
 </head>
 <body>
-  <div id="hud">Loading…</div>
   <script type="module" src="./main.js"></script>
 </body>
 </html>
