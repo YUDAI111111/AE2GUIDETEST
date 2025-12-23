@@ -2,10 +2,10 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 /*
-  AE2 ME Controller - FIXED FINAL
-  - shell / lights ともに MeshBasicMaterial
-  - ライト不要・黒化しない
-  - lights は滑らか interpolate
+  AE2 ME Controller - ORIGINAL LOOK (RESTORED)
+  - 見た目は最初のデモと同じ
+  - lights だけ滑らかに interpolate
+  - 余計な誇張・inside 一切なし
 */
 
 // =========================
@@ -28,12 +28,21 @@ const camera = new THREE.PerspectiveCamera(
   0.1,
   100
 );
-camera.position.set(2.5, 2.0, 2.5);
+camera.position.set(2.4, 2.0, 2.4);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(window.devicePixelRatio);
 document.body.appendChild(renderer.domElement);
+
+// =========================
+// Lights（最初と同程度）
+// =========================
+scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+dirLight.position.set(5, 8, 6);
+scene.add(dirLight);
 
 // =========================
 // Controls
@@ -64,19 +73,20 @@ const lightsTexture = loader.load("./assets/controller_lights.png", (t) => {
 });
 
 // =========================
-// Materials（重要）
+// Materials（原点）
 // =========================
 
-// 外殻：ライト不要・黒くならない
-const shellMaterial = new THREE.MeshBasicMaterial({
+// 外殻：通常描画（明るく・黒くならない）
+const shellMaterial = new THREE.MeshStandardMaterial({
   map: shellTexture,
   side: THREE.DoubleSide
 });
 
-// ライト：常時発光
+// 配線：自己発光だが控えめ
 const lightsMaterial = new THREE.MeshBasicMaterial({
   map: lightsTexture,
   transparent: true,
+  opacity: 0.9,
   side: THREE.DoubleSide
 });
 
@@ -90,7 +100,7 @@ const lightsMesh = new THREE.Mesh(geometry, lightsMaterial);
 scene.add(lightsMesh);
 
 // =========================
-// mcmeta animation (interpolate)
+// mcmeta interpolate（滑らか）
 // =========================
 const startTime = performance.now();
 
