@@ -2,17 +2,17 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 /*
-  AE2 ME Controller - FIXED
-  - lights は MeshBasicMaterial（必ず光る）
-  - mcmeta interpolate: true を滑らか再現
-  - 余計な inside / PBR / emissive を全撤去
+  AE2 ME Controller - FIXED FINAL
+  - shell / lights ともに MeshBasicMaterial
+  - ライト不要・黒化しない
+  - lights は滑らか interpolate
 */
 
 // =========================
 // mcmeta constants
 // =========================
 const TICKS_PER_SECOND = 20;
-const FRAME_TIME_TICKS = 25; // controller_lights.png.mcmeta
+const FRAME_TIME_TICKS = 25;
 const FRAME_TIME_MS = (FRAME_TIME_TICKS / TICKS_PER_SECOND) * 1000;
 const FRAME_HEIGHT = 16;
 
@@ -64,16 +64,16 @@ const lightsTexture = loader.load("./assets/controller_lights.png", (t) => {
 });
 
 // =========================
-// Materials
+// Materials（重要）
 // =========================
 
-// 外殻（普通の描画）
-const shellMaterial = new THREE.MeshStandardMaterial({
+// 外殻：ライト不要・黒くならない
+const shellMaterial = new THREE.MeshBasicMaterial({
   map: shellTexture,
   side: THREE.DoubleSide
 });
 
-// ライト（自己発光・必ず見える）
+// ライト：常時発光
 const lightsMaterial = new THREE.MeshBasicMaterial({
   map: lightsTexture,
   transparent: true,
@@ -90,7 +90,7 @@ const lightsMesh = new THREE.Mesh(geometry, lightsMaterial);
 scene.add(lightsMesh);
 
 // =========================
-// mcmeta animation (interpolate: true)
+// mcmeta animation (interpolate)
 // =========================
 const startTime = performance.now();
 
@@ -99,7 +99,6 @@ function updateLightsAnimation() {
 
   const frameCount = lightsTexture.image.height / FRAME_HEIGHT;
 
-  // repeat 設定は一度だけ
   if (lightsTexture.repeat.y === 1) {
     lightsTexture.repeat.set(1, 1 / frameCount);
   }
@@ -107,7 +106,6 @@ function updateLightsAnimation() {
   const now = performance.now();
   const elapsed = now - startTime;
 
-  // 連続フレーム（滑らか）
   const exactFrame = (elapsed / FRAME_TIME_MS) % frameCount;
   lightsTexture.offset.y = exactFrame / frameCount;
 }
