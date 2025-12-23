@@ -2,25 +2,19 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 /*
-  AE2 ME Controller Web Demo (ONLINE - simplified inside)
-  - shell (powered)
-  - inside (emissive core)
-  - lights (mcmeta interpolate)
-  - DoubleSide materials (no face disappearing)
+  AE2 ME Controller - FIXED
+  - lights は MeshBasicMaterial（必ず光る）
+  - mcmeta interpolate: true を滑らか再現
+  - 余計な inside / PBR / emissive を全撤去
 */
 
 // =========================
 // mcmeta constants
 // =========================
 const TICKS_PER_SECOND = 20;
-const FRAME_TIME_TICKS = 25;
+const FRAME_TIME_TICKS = 25; // controller_lights.png.mcmeta
 const FRAME_TIME_MS = (FRAME_TIME_TICKS / TICKS_PER_SECOND) * 1000;
 const FRAME_HEIGHT = 16;
-
-// =========================
-// State
-// =========================
-const isOnline = true;
 
 // =========================
 // Scene / Camera / Renderer
@@ -34,21 +28,12 @@ const camera = new THREE.PerspectiveCamera(
   0.1,
   100
 );
-camera.position.set(2.6, 2.1, 2.6);
+camera.position.set(2.5, 2.0, 2.5);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(window.devicePixelRatio);
 document.body.appendChild(renderer.domElement);
-
-// =========================
-// Lights
-// =========================
-scene.add(new THREE.AmbientLight(0xffffff, 0.5));
-
-const dirLight = new THREE.DirectionalLight(0xffffff, 0.7);
-dirLight.position.set(5, 10, 7);
-scene.add(dirLight);
 
 // =========================
 // Controls
@@ -59,15 +44,14 @@ controls.enableDamping = true;
 // =========================
 // Geometry
 // =========================
-const shellGeometry = new THREE.BoxGeometry(1, 1, 1);
-const insideGeometry = new THREE.BoxGeometry(0.78, 0.78, 0.78);
+const geometry = new THREE.BoxGeometry(1, 1, 1);
 
 // =========================
 // Textures
 // =========================
 const loader = new THREE.TextureLoader();
 
-const shellTexture = loader.load("./assets/controller_powered.png", (t) => {
+const shellTexture = loader.load("./assets/controller.png", (t) => {
   t.magFilter = THREE.NearestFilter;
   t.minFilter = THREE.NearestFilter;
 });
@@ -82,53 +66,40 @@ const lightsTexture = loader.load("./assets/controller_lights.png", (t) => {
 // =========================
 // Materials
 // =========================
+
+// 外殻（普通の描画）
 const shellMaterial = new THREE.MeshStandardMaterial({
   map: shellTexture,
   side: THREE.DoubleSide
 });
 
-const insideMaterial = new THREE.MeshStandardMaterial({
-  color: new THREE.Color(0xcfffff),
-  emissive: new THREE.Color(0x9ffcff),
-  emissiveIntensity: 1.2,
-  transparent: true,
-  opacity: 0.95,
-  side: THREE.DoubleSide
-});
-
-const lightsMaterial = new THREE.MeshStandardMaterial({
+// ライト（自己発光・必ず見える）
+const lightsMaterial = new THREE.MeshBasicMaterial({
   map: lightsTexture,
   transparent: true,
-  emissive: new THREE.Color(0xffffff),
-  emissiveIntensity: 1.0,
   side: THREE.DoubleSide
 });
 
 // =========================
 // Meshes
 // =========================
-const shellMesh = new THREE.Mesh(shellGeometry, shellMaterial);
+const shellMesh = new THREE.Mesh(geometry, shellMaterial);
 scene.add(shellMesh);
 
-const insideMesh = new THREE.Mesh(insideGeometry, insideMaterial);
-insideMesh.visible = isOnline;
-scene.add(insideMesh);
-
-const lightsMesh = new THREE.Mesh(shellGeometry, lightsMaterial);
-lightsMesh.visible = isOnline;
+const lightsMesh = new THREE.Mesh(geometry, lightsMaterial);
 scene.add(lightsMesh);
 
 // =========================
-// mcmeta animation (interpolate)
+// mcmeta animation (interpolate: true)
 // =========================
 const startTime = performance.now();
 
 function updateLightsAnimation() {
-  if (!isOnline) return;
   if (!lightsTexture.image) return;
 
   const frameCount = lightsTexture.image.height / FRAME_HEIGHT;
 
+  // repeat 設定は一度だけ
   if (lightsTexture.repeat.y === 1) {
     lightsTexture.repeat.set(1, 1 / frameCount);
   }
@@ -136,6 +107,7 @@ function updateLightsAnimation() {
   const now = performance.now();
   const elapsed = now - startTime;
 
+  // 連続フレーム（滑らか）
   const exactFrame = (elapsed / FRAME_TIME_MS) % frameCount;
   lightsTexture.offset.y = exactFrame / frameCount;
 }
