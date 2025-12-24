@@ -189,16 +189,21 @@ try {
     const mats = Array(6).fill(null).map(() => makeMat(baseTexture));
 
     if (topBottomRotation != null) {
-      const topTex = baseTexture.clone();
-      const botTex = baseTexture.clone();
-      topTex.center.set(0.5, 0.5);
-      botTex.center.set(0.5, 0.5);
-      topTex.rotation = topBottomRotation;
-      botTex.rotation = topBottomRotation;
-      topTex.needsUpdate = true;
-      botTex.needsUpdate = true;
+  const topTex = baseTexture.clone();
+  const botTex = baseTexture.clone();
+  const rightTex = baseTexture.clone();
+  const leftTex = baseTexture.clone();
 
-      mats[FACE_TOP] = makeMat(topTex);
+  for (const t of [topTex, botTex, rightTex, leftTex]) {
+    t.center.set(0.5, 0.5);
+    t.rotation = topBottomRotation;
+    t.needsUpdate = true;
+  }
+
+  mats[FACE_TOP] = makeMat(topTex);
+  mats[FACE_BOTTOM] = makeMat(botTex);
+  mats[FACE_RIGHT] = makeMat(rightTex);
+  mats[FACE_LEFT] = makeMat(leftTex);
       mats[FACE_BOTTOM] = makeMat(botTex);
     }
     return mats;
@@ -348,9 +353,8 @@ try {
     if (type === "column_z") {
       group.rotation.x = Math.PI / 2;
     } else if (type === "column_x") {
-      group.rotation.x = Math.PI / 2;
-      group.rotation.y = Math.PI / 2;
-    }
+  group.rotation.y = Math.PI / 2;
+}
     // column_y: no rotation
 
     group.position.set((x * SPACING) - OFFSET, (y * SPACING) - OFFSET, (z * SPACING) - OFFSET);
