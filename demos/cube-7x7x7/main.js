@@ -66,15 +66,6 @@ try {
 controls.enableDamping = true;
   controls.target.set(0, 0, 0);
   controls.update();
-
-    // Animation toggle
-    if (!ANIM_ENABLED) {
-      renderer.render(scene, camera);
-      requestAnimationFrame(animate);
-      return;
-    }
-
-
   scene.add(new THREE.HemisphereLight(0xffffff, 0x202020, 0.8));
   const dir = new THREE.DirectionalLight(0xffffff, 1.0);
   dir.position.set(6, 10, 6);
@@ -775,7 +766,9 @@ instances.push(inst);
   function updateLights(dt) {
     t += dt;
 
-    const cycleSeconds = 0.18; // ここを速くしたければ小さく
+
+    if (!LIGHTS_ENABLED) return;
+    const cycleSeconds = 1 / Math.max(1, LIGHTS_FPS);
     const phase = (t % cycleSeconds) / cycleSeconds;
     const alpha = smoothstep(phase);
 
@@ -819,7 +812,7 @@ instances.push(inst);
     last = now;
 
     controls.update();
-    updateLights(dt);
+    if (ANIM_ENABLED) updateLights(dt);
     renderer.render(scene, camera);
   }
   animate();
