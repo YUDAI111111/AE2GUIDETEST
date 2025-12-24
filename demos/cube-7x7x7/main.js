@@ -18,6 +18,20 @@ try {
   // Scene
   // -------------------------------
   const scene = new THREE.Scene();
+
+  // -------------------------------
+  // Layer groups (1..7) + Compass group (toggleable)
+  // -------------------------------
+  const layerGroups = Array.from({ length: 7 }, (_, i) => {
+    const g = new THREE.Group();
+    g.name = `layer-${i + 1}`;
+    return g;
+  });
+  for (const g of layerGroups) scene.add(g);
+
+  const compassGroup = new THREE.Group();
+  compassGroup.name = "compass";
+  scene.add(compassGroup);
   scene.background = new THREE.Color(0x0b0b0b);
 
   const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 1000);
@@ -367,8 +381,10 @@ try {
       for (let z = 0; z < GRID_SIZE; z++) {
         if (!hasBlock(x, y, z)) continue;
         const inst = makeInstance(x, y, z);
-        scene.add(inst.group);
-        instances.push(inst);
+          const layerIndex = (y === 6) ? 0 : (y === 5) ? 1 : (y === 4) ? 2 : -1;
+  if (layerIndex >= 0) layerGroups[layerIndex].add(inst.group);
+  else scene.add(inst.group);
+instances.push(inst);
       }
     }
   }
@@ -546,13 +562,76 @@ try {
     west.position.set(box.min.x - margin, y, center.z);
     east.position.set(box.max.x + margin, y, center.z);
 
-    scene.add(north, south, west, east);
+    compassGroup.add(north, south, west, east);
   }
 
   addWorldCompassLabels();
 
+  // -------------------------------
+  // UI: Layer visibility + Compass toggle
+  // -------------------------------
+  function createVisibilityPanel() {
+    const panel = document.createElement("div");
+    panel.id = "visibility-panel";
+    panel.style.cssText = [
+      "position:fixed",
+      "right:12px",
+      "top:12px",
+      "z-index:10000",
+      "padding:10px 12px",
+      "border-radius:12px",
+      "background:rgba(0,0,0,.55)",
+      "color:#fff",
+      "font:12px/1.3 system-ui,-apple-system,Segoe UI,sans-serif",
+      "backdrop-filter: blur(4px)",
+      "pointer-events:auto",
+      "user-select:none"
+    ].join(";");
 
+    const title = document.createElement("div");
+    title.textContent = "表示切替";
+    title.style.cssText = "font-weight:700;margin-bottom:8px;";
+    panel.appendChild(title);
 
+    const mkRow = (labelText, checked, onChange) => {
+      const row = document.createElement("label");
+      row.style.cssText = "display:flex;align-items:center;gap:8px;margin:6px 0;cursor:pointer;";
+
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = checked;
+      cb.addEventListener("change", () => onChange(cb.checked));
+
+      const txt = document.createElement("span");
+      txt.textContent = labelText;
+
+      row.appendChild(cb);
+      row.appendChild(txt);
+      return row;
+    };
+
+    // Layers 1..7
+    for (let i = 0; i < 7; i++) {
+      const initial = (i < 3); // layers 1..3 exist now
+      layerGroups[i].visible = initial;
+      panel.appendChild(
+        mkRow(`Layer ${i + 1}`, initial, (v) => (layerGroups[i].visible = v))
+      );
+    }
+
+    // Compass
+    compassGroup.visible = true;
+    panel.appendChild(document.createElement("hr")).style.cssText =
+      "border:none;border-top:1px solid rgba(255,255,255,.18);margin:10px 0;";
+
+    panel.appendChild(
+      mkRow("Compass", true, (v) => (compassGroup.visible = v))
+    );
+
+    document.body.appendChild(panel);
+  }
+
+  createVisibilityPanel();
 
   // -------------------------------
   // Animate lights
