@@ -186,25 +186,25 @@ try {
         emissiveIntensity: BASE_EMISSIVE,
       });
 
+    // default: same texture, no per-face rotation
     const mats = Array(6).fill(null).map(() => makeMat(baseTexture));
 
+    // When we need to align the "top/bottom" pattern with the pulled axis,
+    // we must rotate BOTH the cap faces (top/bottom) and the side caps (right/left),
+    // and we must use unique texture instances per face to avoid shared-state artifacts.
     if (topBottomRotation != null) {
-  const topTex = baseTexture.clone();
-  const botTex = baseTexture.clone();
-  const rightTex = baseTexture.clone();
-  const leftTex = baseTexture.clone();
+      const makeRotTex = () => {
+        const t = baseTexture.clone();
+        t.center.set(0.5, 0.5);
+        t.rotation = topBottomRotation;
+        t.needsUpdate = true;
+        return t;
+      };
 
-  for (const t of [topTex, botTex, rightTex, leftTex]) {
-    t.center.set(0.5, 0.5);
-    t.rotation = topBottomRotation;
-    t.needsUpdate = true;
-  }
-
-  mats[FACE_TOP] = makeMat(topTex);
-  mats[FACE_BOTTOM] = makeMat(botTex);
-  mats[FACE_RIGHT] = makeMat(rightTex);
-  mats[FACE_LEFT] = makeMat(leftTex);
-      mats[FACE_BOTTOM] = makeMat(botTex);
+      mats[FACE_TOP] = makeMat(makeRotTex());
+      mats[FACE_BOTTOM] = makeMat(makeRotTex());
+      mats[FACE_RIGHT] = makeMat(makeRotTex());
+      mats[FACE_LEFT] = makeMat(makeRotTex());
     }
     return mats;
   }
@@ -264,10 +264,17 @@ try {
     const matsA = Array(6).fill(null).map(() => makeLightMat(texA));
     const matsB = Array(6).fill(null).map(() => makeLightMat(texB));
     if (topBottomRotation != null) {
+      // Apply the rotated canvas textures consistently to the cap faces.
+      // This must match makeBaseMaterials() to prevent 'crossed' orientations
+      // (base rotated but lights not rotated).
       matsA[FACE_TOP] = makeLightMat(texA_tb);
       matsA[FACE_BOTTOM] = makeLightMat(texA_tb);
+      matsA[FACE_RIGHT] = makeLightMat(texA_tb);
+      matsA[FACE_LEFT] = makeLightMat(texA_tb);
       matsB[FACE_TOP] = makeLightMat(texB_tb);
       matsB[FACE_BOTTOM] = makeLightMat(texB_tb);
+      matsB[FACE_RIGHT] = makeLightMat(texB_tb);
+      matsB[FACE_LEFT] = makeLightMat(texB_tb);
     }
 
     const meshA = new THREE.Mesh(baseGeo, matsA);
@@ -353,8 +360,8 @@ try {
     if (type === "column_z") {
       group.rotation.x = Math.PI / 2;
     } else if (type === "column_x") {
-  group.rotation.y = Math.PI / 2;
-}
+      group.rotation.y = Math.PI / 2;
+    }
     // column_y: no rotation
 
     group.position.set((x * SPACING) - OFFSET, (y * SPACING) - OFFSET, (z * SPACING) - OFFSET);
