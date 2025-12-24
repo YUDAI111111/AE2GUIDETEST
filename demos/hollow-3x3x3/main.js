@@ -1,12 +1,4 @@
 // demos/hollow-3x3x3/main.js（このファイルを全文置き換え）
-//
-// 修正点（要点だけ）
-// - “回転でごまかす”のをやめ、ブロックの「向き（軸）」を決めてテクスチャを全6面まとめて同じ向きに回転
-// - 「任意の連続3ブロック」が成立する軸（X/Y/Z）をブロック単位で判定し、その軸に引っ張られる
-// - X/Y/Z のうち2軸以上で連続3が成立する場合は inside（inside_a/b）
-//
-// これで、上面の前列(3つ)の“真ん中”は必ず X 方向に引っ張られ（横向き）になります。
-// （回転はブロック全体に適用されるので、左面の該当ブロックも同時に揃います）
 
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -43,13 +35,13 @@ try {
   controls.target.set(0, 0, 0);
   controls.update();
 
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x202020, 0.85));
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x202020, 0.8));
   const dir = new THREE.DirectionalLight(0xffffff, 1.0);
   dir.position.set(6, 10, 6);
   scene.add(dir);
 
   // -------------------------------
-  // Layout: hollow 3×3×3 shell (face centers + cube center empty)
+  // Hollow 3×3×3 shell layout
   // -------------------------------
   const GRID_SIZE = 3;
   const SPACING = 1.0;
@@ -60,16 +52,17 @@ try {
       x === 0 || x === GRID_SIZE - 1 ||
       y === 0 || y === GRID_SIZE - 1 ||
       z === 0 || z === GRID_SIZE - 1;
+
     if (!isSurface) return false;
 
     const mid = Math.floor(GRID_SIZE / 2);
 
     // remove centers of each face
-    if (x === mid && y === mid) return false; // z-faces centers
-    if (x === mid && z === mid) return false; // y-faces centers
-    if (y === mid && z === mid) return false; // x-faces centers
+    if (x === mid && y === mid) return false; // z-faces
+    if (x === mid && z === mid) return false; // y-faces
+    if (y === mid && z === mid) return false; // x-faces
 
-    // remove cube center (odd)
+    // remove cube center (odd only)
     if (x === mid && y === mid && z === mid) return false;
 
     return true;
@@ -106,7 +99,7 @@ try {
   const texBlockBase = loadTex("./assets/controller_powered.png");
   const texColumnBase = loadTex("./assets/controller_column_powered.png");
 
-  // lights sheets (sprite sheets)
+  // lights sheets
   const LIGHT_SHEET_BLOCK_URL = "./assets/controller_lights.png";
   const LIGHT_SHEET_COLUMN_URL = "./assets/controller_column_lights.png";
 
@@ -115,92 +108,104 @@ try {
   const texInsideB = loadTex("./assets/controller_inside_b_powered.png");
 
   // -------------------------------
-  // Geometry
+  // Geometry / Face indices (BoxGeometry order)
+  // [right, left, top, bottom, front, back]
   // -------------------------------
   const baseGeo = new THREE.BoxGeometry(1, 1, 1);
+  const insideGeo = new THREE.BoxGeometry(0.92, 0.92, 0.92);
 
-  // BoxGeometry material order: [right, left, top, bottom, front, back]
   const FACE_RIGHT = 0, FACE_LEFT = 1, FACE_TOP = 2, FACE_BOTTOM = 3, FACE_FRONT = 4, FACE_BACK = 5;
 
   // -------------------------------
-  // Core rule: “任意の連続3ブロック” が成立する軸をブロック単位で決める
+  // AE2-like connectivity rules
   // -------------------------------
-  function has3X(x, y, z) {
-    return (
+
+  // Sandwiched on axis => column_axis
+  // Sandwiched on 2+ axes => inside (A/B parity)
+  // else => block
+  function classifyType(x, y, z) {
+    const sx = hasBlock(x - 1, y, z) && hasBlock(x + 1, y, z);
+    const sy = hasBlock(x, y - 1, z) && hasBlock(x, y + 1, z);
+    const sz = hasBlock(x, y, z - 1) && hasBlock(x, y, z + 1);
+
+    const count = (sx ? 1 : 0) + (sy ? 1 : 0) + (sz ? 1 : 0);
+    if (count >= 2) return "inside";
+    if (sx) return "column_x";
+    if (sy) return "column_y";
+    if (sz) return "column_z";
+    return "block";
+  }
+
+  // 任意の連続3ブロックがあれば、その軸方向に「引っ張られる」扱い（端も含む）
+  function pullAxisFor(x, y, z) {
+    const x3 =
       (hasBlock(x - 2, y, z) && hasBlock(x - 1, y, z)) ||
       (hasBlock(x - 1, y, z) && hasBlock(x + 1, y, z)) ||
-      (hasBlock(x + 1, y, z) && hasBlock(x + 2, y, z))
-    );
-  }
-  function has3Y(x, y, z) {
-    return (
+      (hasBlock(x + 1, y, z) && hasBlock(x + 2, y, z));
+
+    const y3 =
       (hasBlock(x, y - 2, z) && hasBlock(x, y - 1, z)) ||
       (hasBlock(x, y - 1, z) && hasBlock(x, y + 1, z)) ||
-      (hasBlock(x, y + 1, z) && hasBlock(x, y + 2, z))
-    );
-  }
-  function has3Z(x, y, z) {
-    return (
+      (hasBlock(x, y + 1, z) && hasBlock(x, y + 2, z));
+
+    const z3 =
       (hasBlock(x, y, z - 2) && hasBlock(x, y, z - 1)) ||
       (hasBlock(x, y, z - 1) && hasBlock(x, y, z + 1)) ||
-      (hasBlock(x, y, z + 1) && hasBlock(x, y, z + 2))
-    );
-  }
+      (hasBlock(x, y, z + 1) && hasBlock(x, y, z + 2));
 
-  // 返り値:
-  // - {mode:"inside"} … 2軸以上で連続3成立（= 2点以上に引っ張られる）
-  // - {mode:"axis", axis:"x"|"y"|"z"} … 1軸のみ成立（= その軸に引っ張られる）
-  // - {mode:"none"} … 連続3が無い（= 単体扱い）
-  function pullMode(x, y, z) {
-    const x3 = has3X(x, y, z);
-    const y3 = has3Y(x, y, z);
-    const z3 = has3Z(x, y, z);
     const count = (x3 ? 1 : 0) + (y3 ? 1 : 0) + (z3 ? 1 : 0);
-
-    if (count >= 2) return { mode: "inside" };
-    if (x3) return { mode: "axis", axis: "x" };
-    if (y3) return { mode: "axis", axis: "y" };
-    if (z3) return { mode: "axis", axis: "z" };
-    return { mode: "none" };
+    if (count >= 2) return null; // inside/ambiguous
+    if (x3) return "x";
+    if (y3) return "y";
+    if (z3) return "z";
+    return null;
   }
 
-  // 軸→テクスチャ回転（ブロック全体6面に同じ回転を適用）
-  // X方向に引っ張る: 90deg（横向き）
+  // 上下面（立方体の上の面・下の面）の向きを “列方向” に合わせるための回転
+  // X方向に引っ張る: 90deg
   // Z方向に引っ張る: 0deg
-  // Y方向に引っ張る: 0deg（縦方向は見た目が崩れにくいので回転なし。必要ならここだけ変える）
-  function rotationForAxis(axis) {
-    if (axis === "x") return Math.PI / 2;
-    if (axis === "z") return 0;
-    if (axis === "y") return 0;
-    return 0;
-  }
-
-  function rotatedClone(tex, rot) {
-    const t = tex.clone();
-    t.center.set(0.5, 0.5);
-    t.rotation = rot;
-    t.needsUpdate = true;
-    return t;
+  // Y方向: ここでは回転不要（column_y時はモデル回転で表現）
+  function topBottomRotationFor(pullAxis) {
+    if (pullAxis === "x") return Math.PI / 2;
+    if (pullAxis === "z") return 0;
+    return null;
   }
 
   // -------------------------------
   // Materials
   // -------------------------------
   const BASE_EMISSIVE = 0.45;
+  const INSIDE_EMISSIVE = 0.75;
 
-  function makeAllFacesMaterial(texture, emissiveIntensity) {
-    const mat = new THREE.MeshStandardMaterial({
-      map: texture,
-      emissiveMap: texture,
-      emissive: new THREE.Color(0xffffff),
-      emissiveIntensity
-    });
-    // 6面“同一の向き”が要件なので、面ごとの別回転などはしない
-    return [mat, mat, mat, mat, mat, mat];
+  function makeBaseMaterials(baseTexture, topBottomRotation) {
+    const makeMat = (t) =>
+      new THREE.MeshStandardMaterial({
+        map: t,
+        emissiveMap: t,
+        emissive: new THREE.Color(0xffffff),
+        emissiveIntensity: BASE_EMISSIVE,
+      });
+
+    const mats = Array(6).fill(null).map(() => makeMat(baseTexture));
+
+    if (topBottomRotation != null) {
+      const topTex = baseTexture.clone();
+      const botTex = baseTexture.clone();
+      topTex.center.set(0.5, 0.5);
+      botTex.center.set(0.5, 0.5);
+      topTex.rotation = topBottomRotation;
+      botTex.rotation = topBottomRotation;
+      topTex.needsUpdate = true;
+      botTex.needsUpdate = true;
+
+      mats[FACE_TOP] = makeMat(topTex);
+      mats[FACE_BOTTOM] = makeMat(botTex);
+    }
+    return mats;
   }
 
   // -------------------------------
-  // Lights (sprite sheet -> canvas texture -> crossfade)
+  // Lights (sprite-sheet -> canvas textures -> crossfade)
   // -------------------------------
   const W = 16, H = 16;
 
@@ -212,6 +217,7 @@ try {
     tex.wrapT = THREE.ClampToEdgeWrapping;
     tex.magFilter = THREE.NearestFilter;
     tex.minFilter = THREE.NearestMipmapNearestFilter;
+
     if (rotation != null) {
       tex.center.set(0.5, 0.5);
       tex.rotation = rotation;
@@ -225,7 +231,7 @@ try {
     ctx.drawImage(img, 0, idx * H, W, H, 0, 0, W, H);
   }
 
-  function makeLightsLayer(sheetUrl, rotAllFaces) {
+  function makeLightsLayer(sheetUrl, topBottomRotation) {
     const canvasA = document.createElement("canvas");
     const canvasB = document.createElement("canvas");
     canvasA.width = W; canvasA.height = H;
@@ -234,9 +240,10 @@ try {
     const ctxA = canvasA.getContext("2d");
     const ctxB = canvasB.getContext("2d");
 
-    // “全6面が同一向き” 要件に合わせ、CanvasTexture自体に回転を入れて6面同一を作る
-    const texA = mkCanvasTex(canvasA, rotAllFaces);
-    const texB = mkCanvasTex(canvasB, rotAllFaces);
+    const texA = mkCanvasTex(canvasA, null);
+    const texB = mkCanvasTex(canvasB, null);
+    const texA_tb = topBottomRotation != null ? mkCanvasTex(canvasA, topBottomRotation) : null;
+    const texB_tb = topBottomRotation != null ? mkCanvasTex(canvasB, topBottomRotation) : null;
 
     const makeLightMat = (t) =>
       new THREE.MeshStandardMaterial({
@@ -246,12 +253,17 @@ try {
         emissiveMap: t,
         emissive: new THREE.Color(0xffffff),
         emissiveIntensity: 2.0,
-        depthWrite: false
+        depthWrite: false,
       });
 
-    // 6面全部同一
     const matsA = Array(6).fill(null).map(() => makeLightMat(texA));
     const matsB = Array(6).fill(null).map(() => makeLightMat(texB));
+    if (topBottomRotation != null) {
+      matsA[FACE_TOP] = makeLightMat(texA_tb);
+      matsA[FACE_BOTTOM] = makeLightMat(texA_tb);
+      matsB[FACE_TOP] = makeLightMat(texB_tb);
+      matsB[FACE_BOTTOM] = makeLightMat(texB_tb);
+    }
 
     const meshA = new THREE.Mesh(baseGeo, matsA);
     const meshB = new THREE.Mesh(baseGeo, matsB);
@@ -263,23 +275,30 @@ try {
     img.src = sheetUrl;
 
     const layer = {
+      sheetUrl,
       img,
       frames: 1,
       ready: false,
       ctxA, ctxB,
-      texA, texB,
+      texA, texB, texA_tb, texB_tb,
       matsA, matsB,
-      meshA, meshB
+      meshA, meshB,
+      topBottomRotation,
     };
 
     img.onload = () => {
       layer.frames = Math.max(1, Math.floor(img.height / H));
       drawFrame(layer.ctxA, img, 0);
       layer.texA.needsUpdate = true;
+      if (layer.texA_tb) layer.texA_tb.needsUpdate = true;
+
       drawFrame(layer.ctxB, img, 1 % layer.frames);
       layer.texB.needsUpdate = true;
+      if (layer.texB_tb) layer.texB_tb.needsUpdate = true;
+
       layer.ready = true;
     };
+
     img.onerror = (e) => {
       console.error("Failed to load lights sheet:", sheetUrl, e);
       layer.ready = false;
@@ -289,54 +308,54 @@ try {
   }
 
   // -------------------------------
-  // Build blocks
+  // Build instances
   // -------------------------------
   function makeInstance(x, y, z) {
-    const pm = pullMode(x, y, z);
+    const type = classifyType(x, y, z);
 
-    // inside: inside_a/b を全面に貼る（全6面同一向き）
-    if (pm.mode === "inside") {
-      const parity = (x + y + z) & 1;
-      const insideTex = parity ? texInsideA : texInsideB;
+    const pullAxis = pullAxisFor(x, y, z);
+    const topBottomRotation = topBottomRotationFor(pullAxis);
 
-      const baseMats = makeAllFacesMaterial(insideTex, 0.70);
-      const baseMesh = new THREE.Mesh(baseGeo, baseMats);
+    const isColumn = type.startsWith("column");
+    const baseTex = isColumn ? texColumnBase : texBlockBase;
 
-      // inside も lights を重ねる（見た目合わせ）
-      // inside は column/normal どちらでも良いが、囲まれの雰囲気として通常を使う
-      const lights = makeLightsLayer(LIGHT_SHEET_BLOCK_URL, 0);
-
-      const group = new THREE.Group();
-      group.add(baseMesh, lights.meshA, lights.meshB);
-
-      group.position.set((x * SPACING) - OFFSET, (y * SPACING) - OFFSET, (z * SPACING) - OFFSET);
-
-      return { group, lights };
-    }
-
-    // axis: 連続3が成立する軸があるなら column テクスチャ（端も含む）
-    // none: 単体なら通常テクスチャ
-    const isAxis = (pm.mode === "axis");
-    const axis = isAxis ? pm.axis : null;
-
-    const rot = isAxis ? rotationForAxis(axis) : 0;
-
-    const baseTexRaw = isAxis ? texColumnBase : texBlockBase;
-    const baseTex = (isAxis ? rotatedClone(baseTexRaw, rot) : baseTexRaw);
-
-    const baseMats = makeAllFacesMaterial(baseTex, BASE_EMISSIVE);
+    const baseMats = makeBaseMaterials(baseTex, topBottomRotation);
     const baseMesh = new THREE.Mesh(baseGeo, baseMats);
 
-    // lights sheet: columnなら column_lights
-    const sheetUrl = isAxis ? LIGHT_SHEET_COLUMN_URL : LIGHT_SHEET_BLOCK_URL;
-    const lights = makeLightsLayer(sheetUrl, isAxis ? rot : 0);
+    // lights
+    const sheetUrl = isColumn ? LIGHT_SHEET_COLUMN_URL : LIGHT_SHEET_BLOCK_URL;
+    const lights = makeLightsLayer(sheetUrl, topBottomRotation);
+
+    // inside overlay (only for inside)
+    let insideMesh = null;
+    if (type === "inside") {
+      const parity = (x + y + z) & 1;
+      const tex = parity ? texInsideA : texInsideB;
+      const mat = new THREE.MeshStandardMaterial({
+        map: tex,
+        emissiveMap: tex,
+        emissive: new THREE.Color(0xffffff),
+        emissiveIntensity: INSIDE_EMISSIVE,
+      });
+      insideMesh = new THREE.Mesh(insideGeo, mat);
+    }
 
     const group = new THREE.Group();
     group.add(baseMesh, lights.meshA, lights.meshB);
+    if (insideMesh) group.add(insideMesh);
+
+    // AE2-like rotations for column variants (model orientation)
+    if (type === "column_z") {
+      group.rotation.x = Math.PI / 2;
+    } else if (type === "column_x") {
+      group.rotation.x = Math.PI / 2;
+      group.rotation.y = Math.PI / 2;
+    }
+    // column_y: no rotation
 
     group.position.set((x * SPACING) - OFFSET, (y * SPACING) - OFFSET, (z * SPACING) - OFFSET);
 
-    return { group, lights };
+    return { x, y, z, type, group, lights };
   }
 
   const instances = [];
@@ -365,10 +384,11 @@ try {
   function updateLights(dt) {
     t += dt;
 
-    const cycleSeconds = 0.18; // 速度はここ
+    const cycleSeconds = 0.18; // ここを速くしたければ小さく
     const phase = (t % cycleSeconds) / cycleSeconds;
     const alpha = smoothstep(phase);
 
+    // advance frames at cycle boundary
     if (phase < (dt / cycleSeconds)) {
       frameA++;
       frameB = frameA + 1;
@@ -378,13 +398,18 @@ try {
         if (!l.ready) continue;
         const a = frameA % l.frames;
         const b = frameB % l.frames;
+
         drawFrame(l.ctxA, l.img, a);
         l.texA.needsUpdate = true;
+        if (l.texA_tb) l.texA_tb.needsUpdate = true;
+
         drawFrame(l.ctxB, l.img, b);
         l.texB.needsUpdate = true;
+        if (l.texB_tb) l.texB_tb.needsUpdate = true;
       }
     }
 
+    // apply crossfade
     for (const inst of instances) {
       const l = inst.lights;
       for (const m of l.matsA) m.opacity = (l.ready ? (1.0 - alpha) : 0.0);
@@ -393,7 +418,7 @@ try {
   }
 
   // -------------------------------
-  // Render
+  // Render loop
   // -------------------------------
   let last = performance.now();
   function animate() {
