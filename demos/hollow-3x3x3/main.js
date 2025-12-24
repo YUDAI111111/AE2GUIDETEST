@@ -166,9 +166,8 @@ try {
   // Z方向に引っ張る: 0deg
   // Y方向: ここでは回転不要（column_y時はモデル回転で表現）
   function topBottomRotationFor(pullAxis) {
-    // Only affects TOP/BOTTOM. X-axis columns need 0deg; Z-axis columns need 90deg.
-    if (pullAxis === "x") return 0;
-    if (pullAxis === "z") return Math.PI / 2;
+    if (pullAxis === "x") return Math.PI / 2;
+    if (pullAxis === "z") return 0;
     return null;
   }
 
@@ -178,7 +177,7 @@ try {
   const BASE_EMISSIVE = 0.45;
   const INSIDE_EMISSIVE = 0.75;
 
-  function makeBaseMaterials(baseTexture, topBottomRotation) {
+  function makeBaseMaterials(baseTexture, topBottomRotation, sideRotationLR) {
     const makeMat = (t) =>
       new THREE.MeshStandardMaterial({
         map: t,
@@ -187,24 +186,29 @@ try {
         emissiveIntensity: BASE_EMISSIVE,
       });
 
-    // default: no per-face rotation
     const mats = Array(6).fill(null).map(() => makeMat(baseTexture));
 
-    // IMPORTANT: sides (E/W/N/S) are already correct. Rotate ONLY TOP/BOTTOM.
-    // Use unique texture instances to avoid shared-state artifacts.
     if (topBottomRotation != null) {
-      const makeRotTex = () => {
-        const t = baseTexture.clone();
-        t.center.set(0.5, 0.5);
-        t.rotation = topBottomRotation;
-        t.needsUpdate = true;
-        return t;
-      };
+      const topTex = baseTexture.clone();
+      const botTex = baseTexture.clone();
+      topTex.center.set(0.5, 0.5);
+      botTex.center.set(0.5, 0.5);
+      topTex.rotation = topBottomRotation;
+      botTex.rotation = topBottomRotation;
+      topTex.needsUpdate = true;
+      botTex.needsUpdate = true;
 
-      mats[FACE_TOP] = makeMat(makeRotTex());
-      mats[FACE_BOTTOM] = makeMat(makeRotTex());
+      mats[FACE_TOP] = makeMat(topTex);
+      mats[FACE_BOTTOM] = makeMat(botTex);
     }
-    return mats;
+    
+    if (sideRotationLR != null) {
+      matsA[FACE_LEFT] = makeLightMat(texA_lr);
+      matsA[FACE_RIGHT] = makeLightMat(texA_lr);
+      matsB[FACE_LEFT] = makeLightMat(texB_lr);
+      matsB[FACE_RIGHT] = makeLightMat(texB_lr);
+    }
+return mats;
   }
 
   // -------------------------------
@@ -234,7 +238,7 @@ try {
     ctx.drawImage(img, 0, idx * H, W, H, 0, 0, W, H);
   }
 
-  function makeLightsLayer(sheetUrl, topBottomRotation) {
+  function makeLightsLayer(sheetUrl, topBottomRotation, sideRotationLR) {
     const canvasA = document.createElement("canvas");
     const canvasB = document.createElement("canvas");
     canvasA.width = W; canvasA.height = H;
@@ -247,6 +251,9 @@ try {
     const texB = mkCanvasTex(canvasB, null);
     const texA_tb = topBottomRotation != null ? mkCanvasTex(canvasA, topBottomRotation) : null;
     const texB_tb = topBottomRotation != null ? mkCanvasTex(canvasB, topBottomRotation) : null;
+
+    const texA_lr = sideRotationLR != null ? mkCanvasTex(canvasA, sideRotationLR) : null;
+    const texB_lr = sideRotationLR != null ? mkCanvasTex(canvasB, sideRotationLR) : null;
 
     const makeLightMat = (t) =>
       new THREE.MeshStandardMaterial({
@@ -262,7 +269,6 @@ try {
     const matsA = Array(6).fill(null).map(() => makeLightMat(texA));
     const matsB = Array(6).fill(null).map(() => makeLightMat(texB));
     if (topBottomRotation != null) {
-      // Match makeBaseMaterials(): rotate ONLY TOP/BOTTOM.
       matsA[FACE_TOP] = makeLightMat(texA_tb);
       matsA[FACE_BOTTOM] = makeLightMat(texA_tb);
       matsB[FACE_TOP] = makeLightMat(texB_tb);
@@ -285,6 +291,7 @@ try {
       ready: false,
       ctxA, ctxB,
       texA, texB, texA_tb, texB_tb,
+      texA_lr, texB_lr,
       matsA, matsB,
       meshA, meshB,
       topBottomRotation,
@@ -295,12 +302,12 @@ try {
       drawFrame(layer.ctxA, img, 0);
       layer.texA.needsUpdate = true;
       if (layer.texA_tb) layer.texA_tb.needsUpdate = true;
-
-      drawFrame(layer.ctxB, img, 1 % layer.frames);
+      if (layer.texA_lr) layer.texA_lr.needsUpdate = true;
+drawFrame(layer.ctxB, img, 1 % layer.frames);
       layer.texB.needsUpdate = true;
       if (layer.texB_tb) layer.texB_tb.needsUpdate = true;
-
-      layer.ready = true;
+      if (layer.texB_lr) layer.texB_lr.needsUpdate = true;
+layer.ready = true;
     };
 
     img.onerror = (e) => {
@@ -320,15 +327,17 @@ try {
     const pullAxis = pullAxisFor(x, y, z);
     const topBottomRotation = topBottomRotationFor(pullAxis);
 
-    const isColumn = type.startsWith("column");
+    
+    const sideRotationLR = (pullAxis === \"z\") ? (Math.PI / 2) : null;
+const isColumn = type.startsWith("column");
     const baseTex = isColumn ? texColumnBase : texBlockBase;
 
-    const baseMats = makeBaseMaterials(baseTex, topBottomRotation);
+    const baseMats = makeBaseMaterials(baseTex, topBottomRotation, sideRotationLR);
     const baseMesh = new THREE.Mesh(baseGeo, baseMats);
 
     // lights
     const sheetUrl = isColumn ? LIGHT_SHEET_COLUMN_URL : LIGHT_SHEET_BLOCK_URL;
-    const lights = makeLightsLayer(sheetUrl, topBottomRotation);
+    const lights = makeLightsLayer(sheetUrl, topBottomRotation, sideRotationLR);
 
     // inside overlay (only for inside)
     let insideMesh = null;
@@ -352,6 +361,7 @@ try {
     if (type === "column_z") {
       group.rotation.x = Math.PI / 2;
     } else if (type === "column_x") {
+      group.rotation.x = Math.PI / 2;
       group.rotation.y = Math.PI / 2;
     }
     // column_y: no rotation
@@ -405,11 +415,12 @@ try {
         drawFrame(l.ctxA, l.img, a);
         l.texA.needsUpdate = true;
         if (l.texA_tb) l.texA_tb.needsUpdate = true;
-
-        drawFrame(l.ctxB, l.img, b);
+        if (l.texA_lr) l.texA_lr.needsUpdate = true;
+drawFrame(l.ctxB, l.img, b);
         l.texB.needsUpdate = true;
         if (l.texB_tb) l.texB_tb.needsUpdate = true;
-      }
+        if (l.texB_lr) l.texB_lr.needsUpdate = true;
+}
     }
 
     // apply crossfade
