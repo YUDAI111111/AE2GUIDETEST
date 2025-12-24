@@ -3,62 +3,80 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-// -------------------------------
-// Debug HUD: fixed compass labels (北/東/南/西) outside the 3D view
-// -------------------------------
-(function injectCompassHUD() {
-  const run = () => {
-    if (document.getElementById("hud-compass")) return;
 
-    // style
-    if (!document.getElementById("hud-compass-style")) {
-      const style = document.createElement("style");
-      style.id = "hud-compass-style";
-      style.textContent = `
-        #hud-compass{
-          position: fixed;
-          inset: 12px;
-          pointer-events: none;
-          z-index: 9999;
-          font: 700 14px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
-          color: #fff;
-          text-shadow: 0 1px 2px rgba(0,0,0,.8);
-        }
-        #hud-compass .c{
-          position: absolute;
-          padding: 6px 10px;
-          border-radius: 10px;
-          background: rgba(0,0,0,.35);
-          backdrop-filter: blur(4px);
-        }
-        #hud-compass .n{ top: 0; left: 50%; transform: translateX(-50%); }
-        #hud-compass .s{ bottom: 0; left: 50%; transform: translateX(-50%); }
-        #hud-compass .w{ left: 0; top: 50%; transform: translateY(-50%); }
-        #hud-compass .e{ right: 0; top: 50%; transform: translateY(-50%); }
-      `;
-      document.head.appendChild(style);
-    }
 
-    // hud
+// -------------------------------
+// Debug HUD: Compass that rotates with the 3D camera (北/東/南/西)
+// -------------------------------
+function createCompassHUD() {
+  if (document.getElementById("hud-compass")) {
+    // already present
+  } else {
+    const style = document.createElement("style");
+    style.id = "hud-compass-style";
+    style.textContent = `
+      #hud-compass{
+        position: fixed;
+        left: 12px;
+        top: 12px;
+        width: 120px;
+        height: 120px;
+        pointer-events: none;
+        z-index: 9999;
+        font: 700 13px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+        color: #fff;
+        text-shadow: 0 1px 2px rgba(0,0,0,.9);
+      }
+      #hud-compass .ring{
+        position:absolute; inset:0;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,.25);
+        background: rgba(0,0,0,.18);
+        backdrop-filter: blur(4px);
+      }
+      #hud-compass .wheel{
+        position:absolute; inset:0;
+        transform-origin: 50% 50%;
+      }
+      #hud-compass .lbl{
+        position:absolute;
+        padding: 5px 7px;
+        border-radius: 10px;
+        background: rgba(0,0,0,.35);
+      }
+      #hud-compass .n{ left:50%; top:6px; transform: translateX(-50%); }
+      #hud-compass .s{ left:50%; bottom:6px; transform: translateX(-50%); }
+      #hud-compass .w{ left:6px; top:50%; transform: translateY(-50%); }
+      #hud-compass .e{ right:6px; top:50%; transform: translateY(-50%); }
+    `;
+    document.head.appendChild(style);
+
     const hud = document.createElement("div");
     hud.id = "hud-compass";
     hud.setAttribute("aria-hidden", "true");
     hud.innerHTML = `
-      <div class="c n">北</div>
-      <div class="c e">東</div>
-      <div class="c s">南</div>
-      <div class="c w">西</div>
+      <div class="ring"></div>
+      <div class="wheel" id="hud-compass-wheel">
+        <div class="lbl n">北</div>
+        <div class="lbl e">東</div>
+        <div class="lbl s">南</div>
+        <div class="lbl w">西</div>
+      </div>
     `;
     document.body.appendChild(hud);
-  };
-
-  if (document.readyState === "loading") {
-    window.addEventListener("DOMContentLoaded", run, { once: true });
-  } else {
-    run();
   }
-})();
 
+  const wheel = document.getElementById("hud-compass-wheel");
+  const dir = new THREE.Vector3();
+
+  return (camera) => {
+    if (!wheel || !camera) return;
+    camera.getWorldDirection(dir);
+    // heading: 0 when facing North (-Z), +90° when facing East (+X)
+    const heading = Math.atan2(dir.x, -dir.z);
+    wheel.style.transform = `rotate(${heading}rad)`;
+  };
+}
 
 function fatal(e) {
   console.error(e);
@@ -87,11 +105,14 @@ try {
   document.body.style.overflow = "hidden";
   document.body.appendChild(renderer.domElement);
 
+
+  const updateCompass = createCompassHUD();
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.target.set(0, 0, 0);
   controls.update();
 
+    updateCompass(camera);
   scene.add(new THREE.HemisphereLight(0xffffff, 0x202020, 0.8));
   const dir = new THREE.DirectionalLight(0xffffff, 1.0);
   dir.position.set(6, 10, 6);
