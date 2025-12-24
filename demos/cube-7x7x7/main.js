@@ -63,16 +63,21 @@ try {
 
   // Fine-grained zoom: disable OrbitControls' default wheel zoom and implement small-step dolly.
   controls.enableZoom = false;
-  const __zoomStep = 1.02; // finer zoom
+  const __zoomBase = 1.00025; // smaller = finer zoom (trackpad-friendly)
   renderer.domElement.addEventListener(
     "wheel",
     (e) => {
       e.preventDefault();
+      // Normalize: use magnitude but clamp per event (trackpads can emit huge deltas)
       const dy = e.deltaY;
+      const mag = Math.min(240, Math.abs(dy));
+      const factor = Math.pow(__zoomBase, mag);
       if (dy > 0) {
-        camera.position.sub(controls.target).multiplyScalar(__zoomStep).add(controls.target);
+        // zoom out
+        camera.position.sub(controls.target).multiplyScalar(factor).add(controls.target);
       } else if (dy < 0) {
-        camera.position.sub(controls.target).multiplyScalar(1 / __zoomStep).add(controls.target);
+        // zoom in
+        camera.position.sub(controls.target).multiplyScalar(1 / factor).add(controls.target);
       }
       // clamp distance
       const d = camera.position.distanceTo(controls.target);
@@ -345,6 +350,22 @@ controls.enableDamping = true;
       matsA[FACE_BOTTOM] = makeLightMat(texA_tb);
       matsB[FACE_TOP] = makeLightMat(texB_tb);
       matsB[FACE_BOTTOM] = makeLightMat(texB_tb);
+    }
+
+
+    // Hide lights on internal faces (neighbors exist) to reduce draw cost
+    if (faceVisibleMask && faceVisibleMask.length === 6) {
+      const invisible = new THREE.MeshStandardMaterial({
+        transparent: true,
+        opacity: 0.0,
+        depthWrite: false,
+      });
+      for (let fi = 0; fi < 6; fi++) {
+        if (!faceVisibleMask[fi]) {
+          matsA[fi] = invisible;
+          matsB[fi] = invisible;
+        }
+      }
     }
 
     const meshA = new THREE.Mesh(baseGeo, matsA);
@@ -713,11 +734,21 @@ instances.push(inst);
         mkRow(`Layer ${i + 1}`, initial, (v) => (layerGroups[i].visible = v))
       );
     }
+    // Animate (pause lights animation without hiding)
+    panel.appendChild(
+      mkRow("Animate", true, (v) => {
+        ANIM_ENABLED = v;
+        __requestRender();
+      })
+    );
+
+
 
     // Lights
     panel.appendChild(
       mkRow("Lights", true, (v) => {
         LIGHTS_ENABLED = v;
+        __requestRender();
         for (const inst of instances) {
           if (!inst.lights || !LIGHTS_ENABLED) continue;
           inst.lights.meshA.visible = v;
@@ -739,7 +770,8 @@ instances.push(inst);
       const b = document.createElement("button");
       b.textContent = String(v);
       b.style.cssText = "padding:6px 8px;border-radius:10px;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);color:#fff;cursor:pointer;";
-      b.addEventListener("click", () => { LIGHTS_FPS = v; fpsValue.textContent = String(v); });
+      b.addEventListener("click", () => { LIGHTS_FPS = v; fpsValue.textContent = String(v);
+        __requestRender(); });
       return b;
     };
     fpsRow.appendChild(fpsLabel);
