@@ -586,9 +586,6 @@ instances.push(inst);
     // Bottom 3 layers (5..7): y=2,1,0
     applyHotfixForYRange(0, 2);
 
-    }
-
-
     north.position.set(center.x, y, box.min.z - margin);
     south.position.set(center.x, y, box.max.z + margin);
     west.position.set(box.min.x - margin, y, center.z);
