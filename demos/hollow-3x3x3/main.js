@@ -166,8 +166,9 @@ try {
   // Z方向に引っ張る: 0deg
   // Y方向: ここでは回転不要（column_y時はモデル回転で表現）
   function topBottomRotationFor(pullAxis) {
-    if (pullAxis === "x") return Math.PI / 2;
-    if (pullAxis === "z") return 0;
+    // TOP/BOTTOM were 90deg off; swap mapping.
+    if (pullAxis === "x") return 0;
+    if (pullAxis === "z") return Math.PI / 2;
     return null;
   }
 
@@ -186,12 +187,8 @@ try {
         emissiveIntensity: BASE_EMISSIVE,
       });
 
-    // default: same texture, no per-face rotation
     const mats = Array(6).fill(null).map(() => makeMat(baseTexture));
 
-    // When we need to align the "top/bottom" pattern with the pulled axis,
-    // we must rotate BOTH the cap faces (top/bottom) and the side caps (right/left),
-    // and we must use unique texture instances per face to avoid shared-state artifacts.
     if (topBottomRotation != null) {
       const makeRotTex = () => {
         const t = baseTexture.clone();
@@ -264,9 +261,6 @@ try {
     const matsA = Array(6).fill(null).map(() => makeLightMat(texA));
     const matsB = Array(6).fill(null).map(() => makeLightMat(texB));
     if (topBottomRotation != null) {
-      // Apply the rotated canvas textures consistently to the cap faces.
-      // This must match makeBaseMaterials() to prevent 'crossed' orientations
-      // (base rotated but lights not rotated).
       matsA[FACE_TOP] = makeLightMat(texA_tb);
       matsA[FACE_BOTTOM] = makeLightMat(texA_tb);
       matsA[FACE_RIGHT] = makeLightMat(texA_tb);
