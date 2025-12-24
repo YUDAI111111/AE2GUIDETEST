@@ -838,8 +838,8 @@ instances.push(inst);
   // -------------------------------
   // Render loop
   // -------------------------------
-  let __requestRender();
-  const __requestRender = () => { __requestRender(); };
+  let __needsRender = true;
+  const __requestRender = () => { __needsRender = true; };
   let last = performance.now();
   function animate() {
     requestAnimationFrame(animate);
