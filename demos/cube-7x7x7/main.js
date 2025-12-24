@@ -53,7 +53,7 @@ try {
   controls.enablePan = false;
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
-  controls.zoomSpeed = 0.85;
+  controls.zoomSpeed = 0.25;
   controls.rotateSpeed = 0.55;
   controls.minDistance = 4.0;
   controls.maxDistance = 80.0;
@@ -66,6 +66,14 @@ try {
 controls.enableDamping = true;
   controls.target.set(0, 0, 0);
   controls.update();
+
+    // Animation toggle
+    if (!ANIM_ENABLED) {
+      renderer.render(scene, camera);
+      requestAnimationFrame(animate);
+      return;
+    }
+
 
   scene.add(new THREE.HemisphereLight(0xffffff, 0x202020, 0.8));
   const dir = new THREE.DirectionalLight(0xffffff, 1.0);
@@ -255,6 +263,7 @@ controls.enableDamping = true;
   // -------------------------------
   // Lights (sprite-sheet -> canvas textures -> crossfade)
   let LIGHTS_ENABLED = true;
+  let ANIM_ENABLED = true;
   let LIGHTS_FPS = 6; // reduced for performance
 
   // -------------------------------
@@ -686,7 +695,7 @@ instances.push(inst);
       mkRow("Lights", true, (v) => {
         LIGHTS_ENABLED = v;
         for (const inst of instances) {
-          if (!inst.lights) continue;
+          if (!inst.lights || !LIGHTS_ENABLED) continue;
           inst.lights.meshA.visible = v;
           inst.lights.meshB.visible = v;
         }
@@ -698,15 +707,19 @@ instances.push(inst);
     fpsRow.style.cssText = "display:flex;gap:8px;margin:6px 0;align-items:center;";
     const fpsLabel = document.createElement("span");
     fpsLabel.textContent = "Lights FPS";
+    const fpsValue = document.createElement("span");
+    fpsValue.textContent = String(LIGHTS_FPS);
+    fpsValue.style.cssText = "opacity:.9;";
     fpsLabel.style.cssText = "opacity:.85;min-width:70px;";
     const mkFpsBtn = (v) => {
       const b = document.createElement("button");
       b.textContent = String(v);
       b.style.cssText = "padding:6px 8px;border-radius:10px;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);color:#fff;cursor:pointer;";
-      b.addEventListener("click", () => { LIGHTS_FPS = v; });
+      b.addEventListener("click", () => { LIGHTS_FPS = v; fpsValue.textContent = String(v); });
       return b;
     };
     fpsRow.appendChild(fpsLabel);
+    fpsRow.appendChild(fpsValue);
     fpsRow.appendChild(mkFpsBtn(3));
     fpsRow.appendChild(mkFpsBtn(6));
     fpsRow.appendChild(mkFpsBtn(12));
