@@ -186,8 +186,10 @@ try {
         emissiveIntensity: BASE_EMISSIVE,
       });
 
+    // default: no per-face rotation
     const mats = Array(6).fill(null).map(() => makeMat(baseTexture));
 
+    // Rotate ONLY TOP/BOTTOM when needed (unique texture instances).
     if (topBottomRotation != null) {
       const topTex = baseTexture.clone();
       const botTex = baseTexture.clone();
@@ -201,14 +203,23 @@ try {
       mats[FACE_TOP] = makeMat(topTex);
       mats[FACE_BOTTOM] = makeMat(botTex);
     }
-    
+
+    // For Z-axis columns, LEFT/RIGHT faces may need an extra 90deg to match the AE2 texture orientation.
     if (sideRotationLR != null) {
-      matsA[FACE_LEFT] = makeLightMat(texA_lr);
-      matsA[FACE_RIGHT] = makeLightMat(texA_lr);
-      matsB[FACE_LEFT] = makeLightMat(texB_lr);
-      matsB[FACE_RIGHT] = makeLightMat(texB_lr);
+      const leftTex = baseTexture.clone();
+      const rightTex = baseTexture.clone();
+      leftTex.center.set(0.5, 0.5);
+      rightTex.center.set(0.5, 0.5);
+      leftTex.rotation = sideRotationLR;
+      rightTex.rotation = sideRotationLR;
+      leftTex.needsUpdate = true;
+      rightTex.needsUpdate = true;
+
+      mats[FACE_LEFT] = makeMat(leftTex);
+      mats[FACE_RIGHT] = makeMat(rightTex);
     }
-return mats;
+
+    return mats;
   }
 
   // -------------------------------
