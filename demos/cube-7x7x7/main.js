@@ -39,9 +39,8 @@ try {
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
 
-  // Render-on-demand helpers (must be defined early; used by wheel/UI handlers)
-renderer.setSize(innerWidth, innerHeight);
-    __requestRender();
+  // Render-on-demand helpers (used by wheel/UI handlers)
+  renderer.setSize(innerWidth, innerHeight);
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   document.body.style.margin = "0";
   document.body.style.overflow = "hidden";
@@ -868,7 +867,6 @@ instances.push(inst);
     camera.aspect = innerWidth / innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
-    __requestRender();
   });
 } catch (e) {
   fatal(e);
