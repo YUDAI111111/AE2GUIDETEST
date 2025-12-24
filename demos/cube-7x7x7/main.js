@@ -39,6 +39,7 @@ try {
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(innerWidth, innerHeight);
+    __requestRender();
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   document.body.style.margin = "0";
   document.body.style.overflow = "hidden";
@@ -57,7 +58,34 @@ try {
   controls.rotateSpeed = 0.55;
   controls.minDistance = 4.0;
   controls.maxDistance = 80.0;
-  controls.screenSpacePanning = false;
+  
+
+  // Fine-grained zoom: disable OrbitControls' default wheel zoom and implement small-step dolly.
+  controls.enableZoom = false;
+  const __zoomStep = 1.02; // finer zoom
+  renderer.domElement.addEventListener(
+    "wheel",
+    (e) => {
+      e.preventDefault();
+      const dy = e.deltaY;
+      if (dy > 0) {
+        camera.position.sub(controls.target).multiplyScalar(__zoomStep).add(controls.target);
+      } else if (dy < 0) {
+        camera.position.sub(controls.target).multiplyScalar(1 / __zoomStep).add(controls.target);
+      }
+      // clamp distance
+      const d = camera.position.distanceTo(controls.target);
+      if (d < controls.minDistance) {
+        camera.position.sub(controls.target).setLength(controls.minDistance).add(controls.target);
+      } else if (d > controls.maxDistance) {
+        camera.position.sub(controls.target).setLength(controls.maxDistance).add(controls.target);
+      }
+      controls.update();
+      __requestRender();
+    },
+    { passive: false }
+  );
+controls.screenSpacePanning = false;
   if ("dollyToCursor" in controls) controls.dollyToCursor = false;
   // Touch: avoid 2-finger pan (use dolly+rotate)
   if (controls.touches && typeof THREE !== "undefined" && THREE.TOUCH && THREE.TOUCH.DOLLY_ROTATE != null) {
@@ -66,6 +94,8 @@ try {
 controls.enableDamping = true;
   controls.target.set(0, 0, 0);
   controls.update();
+
+  controls.addEventListener('change', () => { if (!ANIM_ENABLED) __requestRender(); });
   scene.add(new THREE.HemisphereLight(0xffffff, 0x202020, 0.8));
   const dir = new THREE.DirectionalLight(0xffffff, 1.0);
   dir.position.set(6, 10, 6);
@@ -387,7 +417,9 @@ const isColumn = type.startsWith("column");
     const sheetUrl = isColumn ? LIGHT_SHEET_COLUMN_URL : LIGHT_SHEET_BLOCK_URL;
     const lights = LIGHTS_ENABLED ? makeLightsLayer(sheetUrl, topBottomRotation, faceMask) : null;
 
-    // inside overlay (only for inside)
+    
+    if (lights && lights.meshB) lights.meshB.visible = false; // perf: disable crossfade
+// inside overlay (only for inside)
     let insideMesh = null;
     if (type === "inside") {
       const parity = (x + y + z) & 1;
@@ -779,6 +811,7 @@ instances.push(inst);
 
       for (const inst of instances) {
         const l = inst.lights;
+      const hasB = !!l.meshB;
         if (!l.ready) continue;
         const a = frameA % l.frames;
         const b = frameB % l.frames;
@@ -796,14 +829,17 @@ instances.push(inst);
     // apply crossfade
     for (const inst of instances) {
       const l = inst.lights;
+      const hasB = !!l.meshB;
       for (const m of l.matsA) m.opacity = (l.ready ? (1.0 - alpha) : 0.0);
-      for (const m of l.matsB) m.opacity = (l.ready ? alpha : 0.0);
+      if (hasB) for (const m of l.matsB) m.opacity = (l.ready ? alpha : 0.0);
     }
   }
 
   // -------------------------------
   // Render loop
   // -------------------------------
+  let __requestRender();
+  const __requestRender = () => { __requestRender(); };
   let last = performance.now();
   function animate() {
     requestAnimationFrame(animate);
@@ -812,8 +848,17 @@ instances.push(inst);
     last = now;
 
     controls.update();
-    if (ANIM_ENABLED) updateLights(dt);
-    renderer.render(scene, camera);
+
+    if (ANIM_ENABLED) {
+      updateLights(dt);
+      renderer.render(scene, camera);
+    } else {
+      // When animation is paused, only render when something changed.
+      if (__needsRender) {
+        renderer.render(scene, camera);
+        __needsRender = false;
+      }
+    }
   }
   animate();
 
@@ -821,6 +866,7 @@ instances.push(inst);
     camera.aspect = innerWidth / innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
+    __requestRender();
   });
 } catch (e) {
   fatal(e);
