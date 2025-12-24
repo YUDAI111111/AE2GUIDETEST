@@ -432,8 +432,6 @@ try {
     // place at mid-height, outside each side
     const y = center.y;
 
-const y = center.y;
-
     // ---- Rotation hotfix (block-wise, applied per 3×3 sub-cube) ----
     // Same approach as the completed 3×3×3 demo:
     // rotate the 4 'edge-center' blocks (x=mid within the 3×3, z=min/max, y=min/max) by +90°.
