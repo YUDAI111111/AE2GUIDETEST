@@ -521,9 +521,13 @@ instances.push(inst);
     const findInst = (x, y, z) =>
       instances.find(
         (i) =>
-          Math.abs(i.grid.x - x) < 1e-6 &&
-          Math.abs(i.grid.y - y) < 1e-6 &&
-          Math.abs(i.grid.z - z) < 1e-6
+          i &&
+          typeof i.x === "number" &&
+          typeof i.y === "number" &&
+          typeof i.z === "number" &&
+          Math.abs(i.x - x) < 1e-6 &&
+          Math.abs(i.y - y) < 1e-6 &&
+          Math.abs(i.z - z) < 1e-6
       );
 
     const Q = Math.PI / 2;
