@@ -206,8 +206,6 @@ try {
     }
     return mats;
   }
-    return mats;
-  }
 
   // -------------------------------
   // Lights (sprite-sheet -> canvas textures -> crossfade)
