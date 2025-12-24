@@ -489,10 +489,33 @@ try {
 
     const rotateAllFacesInMesh = (mesh, delta) => {
       if (!mesh || !mesh.material) return;
+
+      // CanvasTextures are often shared across multiple faces/materials within the same mesh
+      // (e.g., TOP/BOTTOM share the same animated canvas texture). Rotating them per-face
+      // would apply delta multiple times and desync the glow pattern.
+      const seenCanvas = new Set();
+
+      const rotateOne = (mat) => {
+        if (!mat) return;
+        const tex = mat.map || mat.emissiveMap || null;
+        if (!tex) return;
+
+        const isCanvasTex =
+          !!tex.isCanvasTexture ||
+          (tex.image &&
+            (tex.image instanceof HTMLCanvasElement || tex.image?.tagName === "CANVAS"));
+
+        if (isCanvasTex) {
+          if (seenCanvas.has(tex)) return; // rotate only once per unique canvas texture
+          seenCanvas.add(tex);
+        }
+        rotateMatTexture(mat, delta);
+      };
+
       if (Array.isArray(mesh.material) && mesh.material.length >= 6) {
-        for (let fi = 0; fi < 6; fi++) rotateMatTexture(mesh.material[fi], delta);
+        for (let fi = 0; fi < 6; fi++) rotateOne(mesh.material[fi]);
       } else {
-        rotateMatTexture(mesh.material, delta);
+        rotateOne(mesh.material);
       }
     };
 
