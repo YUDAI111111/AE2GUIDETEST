@@ -429,6 +429,67 @@ try {
     // place at mid-height, outside each side
     const y = center.y;
 
+    // ---- Rotation hotfix (debug-driven) ----
+    // Mismatches reported: 南2/南7/北2/北7/上2/上7/下2/下7
+    // These correspond to the 4 edge-center blocks at:
+    // (x=mid, z=min/max) × (y=min/max). Rotate only the affected faces by +90°.
+    const uniqSorted = (arr) => Array.from(new Set(arr.map((v) => +v.toFixed(6)))).sort((a,b)=>a-b);
+    const xs = uniqSorted(instances.map((i) => i.group.position.x));
+    const ys = uniqSorted(instances.map((i) => i.group.position.y));
+    const zs = uniqSorted(instances.map((i) => i.group.position.z));
+
+    const midX = xs[Math.floor(xs.length / 2)];
+    const minY = ys[0], maxY = ys[ys.length - 1];
+    const minZ = zs[0], maxZ = zs[zs.length - 1];
+
+    const findInst = (x, y, z) =>
+      instances.find(
+        (i) =>
+          Math.abs(i.group.position.x - x) < 1e-4 &&
+          Math.abs(i.group.position.y - y) < 1e-4 &&
+          Math.abs(i.group.position.z - z) < 1e-4
+      );
+
+    const rotateFaceTexture = (mesh, faceIndex, delta) => {
+      if (!mesh || !mesh.material) return;
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      const m = mats[faceIndex];
+      if (!m || !m.map) return;
+
+      const base = m.map;
+      const t = base.clone();
+      t.center.set(0.5, 0.5);
+      t.rotation = (base.rotation || 0) + delta;
+      t.needsUpdate = true;
+
+      m.map = t;
+      if ("emissiveMap" in m) m.emissiveMap = t;
+      m.needsUpdate = true;
+    };
+
+    const applyToGroup = (group, faceDeltas) => {
+      group.traverse((obj) => {
+        if (!obj.isMesh) return;
+        if (Array.isArray(obj.material) && obj.material.length >= 6) {
+          for (const [faceIdx, delta] of faceDeltas) {
+            rotateFaceTexture(obj, faceIdx, delta);
+          }
+        }
+      });
+    };
+
+    // Face indices (THREE.BoxGeometry): RIGHT=0 LEFT=1 TOP=2 BOTTOM=3 FRONT=4 BACK=5
+    const Q = Math.PI / 2;
+
+    const inst_top_north = findInst(midX, maxY, minZ); // 北2 (= 上2)
+    const inst_bot_north = findInst(midX, minY, minZ); // 北7 (= 下7)
+    const inst_top_south = findInst(midX, maxY, maxZ); // 南2 (= 上7)
+    const inst_bot_south = findInst(midX, minY, maxZ); // 南7 (= 下2)
+
+    if (inst_top_north) applyToGroup(inst_top_north.group, [[5, Q], [2, Q]]);
+    if (inst_bot_north) applyToGroup(inst_bot_north.group, [[5, Q], [3, Q]]);
+    if (inst_top_south) applyToGroup(inst_top_south.group, [[4, Q], [2, Q]]);
+    if (inst_bot_south) applyToGroup(inst_bot_south.group, [[4, Q], [3, Q]]);
     north.position.set(center.x, y, box.min.z - margin);
     south.position.set(center.x, y, box.max.z + margin);
     west.position.set(box.min.x - margin, y, center.z);
