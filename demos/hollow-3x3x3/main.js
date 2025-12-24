@@ -454,23 +454,28 @@ try {
     const rotateMatTexture = (mat, delta) => {
       if (!mat) return;
 
-      // Light layer uses CanvasTextures that are updated every frame.
-      // If we replace the texture reference (clone), animation loses its update target.
-      // Therefore: for MeshBasicMaterial (light overlay), rotate IN-PLACE.
-      // For MeshStandardMaterial (base), clone per face to avoid shared-state issues.
-      const isLightMat = !!mat.isMeshBasicMaterial;
-      const tex = mat.map || (mat.emissiveMap || null);
+      // IMPORTANT:
+      // Light layer textures are CanvasTextures updated every frame.
+      // If we replace them (clone + reassign), the animation keeps updating the original,
+      // and the visible material stops glowing. Therefore, CanvasTexture must be rotated IN-PLACE.
+      // Base textures (image textures) can be safely cloned per face.
+      const tex = mat.map || mat.emissiveMap || null;
       if (!tex) return;
 
-      if (isLightMat) {
+      const isCanvasTex =
+        !!tex.isCanvasTexture ||
+        (tex.image && (tex.image instanceof HTMLCanvasElement || tex.image?.tagName === "CANVAS"));
+
+      if (isCanvasTex) {
         tex.center?.set(0.5, 0.5);
         tex.rotation = (tex.rotation || 0) + delta;
         tex.needsUpdate = true;
-        if (mat.map) mat.map = tex;
+        // keep same reference; just ensure material updates
         mat.needsUpdate = true;
         return;
       }
 
+      // Image texture: clone to avoid shared-state issues across faces/materials.
       const base = tex;
       const t = base.clone();
       t.center.set(0.5, 0.5);
