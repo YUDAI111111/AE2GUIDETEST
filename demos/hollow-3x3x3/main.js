@@ -4,7 +4,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 // ===== Settings =====
 const GRID_SIZE = 3;               // 3x3x3
 const SPACING = 1.0;               // no visible gaps between blocks
-const FRAME_MS = (12/20)*1000;     // smooth crossfade speed (same as single demo)
+const FRAME_MS = (12/20)*1000;     // lights smooth speed
 const BASE_EMISSIVE = 0.35;        // guide-look: make powered base look "on"
 const INSIDE_EMISSIVE = 0.45;
 const LIGHTS_EMISSIVE = 1.0;
@@ -19,7 +19,6 @@ function isHole(x,y,z){
     (y===1 && z===1 && (x===0 || x===2));
   return core || faceCenters;
 }
-function hasKey(set,x,y,z){ return set.has(`${x},${y},${z}`); }
 
 // build set of blocks
 const blocks = new Set();
@@ -31,7 +30,7 @@ for(let x=0;x<GRID_SIZE;x++){
     }
   }
 }
-function hasBlock(x,y,z){ return hasKey(blocks,x,y,z); }
+function hasBlock(x,y,z){ return blocks.has(`${x},${y},${z}`); }
 
 // ===== Scene =====
 const scene = new THREE.Scene();
@@ -66,17 +65,6 @@ function mc(tex){
   tex.wrapT = THREE.ClampToEdgeWrapping;
   return tex;
 }
-function mcClone(src){
-  // clone keeps image, but we must re-apply MC settings (filters, wrap, colorspace)
-  const t = src.clone();
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.magFilter = THREE.NearestFilter;
-  t.minFilter = THREE.NearestFilter;
-  t.generateMipmaps = false;
-  t.wrapS = THREE.ClampToEdgeWrapping;
-  t.wrapT = THREE.ClampToEdgeWrapping;
-  return t;
-}
 
 const texBlockBase   = loader.load("./assets/controller_powered.png", mc);
 const texColumnBase  = loader.load("./assets/controller_column_powered.png", mc);
@@ -94,12 +82,133 @@ const insideGeo = new THREE.BoxGeometry(0.92,0.92,0.92);
 // BoxGeometry material order: [right, left, top, bottom, front, back]
 const FACE_RIGHT = 0, FACE_LEFT = 1, FACE_TOP = 2, FACE_BOTTOM = 3, FACE_FRONT = 4, FACE_BACK = 5;
 
-// ===== Column axis classification (same as earlier "good" build) =====
+// Rotate only top/bottom faces when block is sandwiched vertically.
+// This matches the "pulled to the sides" look you described for stacked controllers.
+function makeFaceMaterials(baseTexture, emissiveIntensity, rotateTopBottom){
+  const makeMat = (t)=> new THREE.MeshStandardMaterial({
+    map: t,
+    emissiveMap: t,
+    emissive: new THREE.Color(0xffffff),
+    emissiveIntensity
+  });
+
+  // Default: all faces share the same texture object
+  const mats = Array(6).fill(null).map(()=> makeMat(baseTexture));
+
+  if(rotateTopBottom){
+    // Clone texture objects for top/bottom only, so rotation doesn't affect other faces.
+    const topTex = baseTexture.clone();
+    const botTex = baseTexture.clone();
+    topTex.center.set(0.5,0.5);
+    botTex.center.set(0.5,0.5);
+    topTex.rotation = Math.PI/2;
+    botTex.rotation = Math.PI/2;
+    topTex.needsUpdate = true;
+    botTex.needsUpdate = true;
+
+    mats[FACE_TOP] = makeMat(topTex);
+    mats[FACE_BOTTOM] = makeMat(botTex);
+  }
+  return mats;
+}
+
+const W=16,H=16;
+
+// Lights layer with smooth crossfade.
+// We need per-face materials too, because only top/bottom should be rotated in the y-sandwiched case.
+function makeLightsLayer(sheetTexture, rotateTopBottom){
+  const canvasA = document.createElement("canvas");
+  const canvasB = document.createElement("canvas");
+  canvasA.width=canvasB.width=W;
+  canvasA.height=canvasB.height=H;
+
+  const ctxA = canvasA.getContext("2d");
+  const ctxB = canvasB.getContext("2d");
+  ctxA.imageSmoothingEnabled=false;
+  ctxB.imageSmoothingEnabled=false;
+
+  const mkCanvasTex = (canvas, rot)=>{
+    const t = new THREE.CanvasTexture(canvas);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.magFilter = THREE.NearestFilter;
+    t.minFilter = THREE.NearestFilter;
+    t.generateMipmaps = false;
+    if(rot){
+      t.center.set(0.5,0.5);
+      t.rotation = Math.PI/2;
+    }
+    return t;
+  };
+
+  const texA = mkCanvasTex(canvasA, false);
+  const texB = mkCanvasTex(canvasB, false);
+  const texA_tb = rotateTopBottom ? mkCanvasTex(canvasA, true) : null;
+  const texB_tb = rotateTopBottom ? mkCanvasTex(canvasB, true) : null;
+
+  const makeMat = (t, opacity)=> new THREE.MeshStandardMaterial({
+    map: t,
+    emissiveMap: t,
+    emissive: new THREE.Color(0xffffff),
+    emissiveIntensity: LIGHTS_EMISSIVE,
+    transparent: true,
+    opacity,
+    depthWrite: false
+  });
+
+  // Default: same texture on all faces
+  const matsA = Array(6).fill(null).map(()=> makeMat(texA, 1));
+  const matsB = Array(6).fill(null).map(()=> makeMat(texB, 0));
+
+  if(rotateTopBottom){
+    matsA[FACE_TOP] = makeMat(texA_tb, 1);
+    matsA[FACE_BOTTOM] = makeMat(texA_tb, 1);
+    matsB[FACE_TOP] = makeMat(texB_tb, 0);
+    matsB[FACE_BOTTOM] = makeMat(texB_tb, 0);
+  }
+
+  const meshA = new THREE.Mesh(baseGeo, matsA);
+  const meshB = new THREE.Mesh(baseGeo, matsB);
+  meshA.scale.setScalar(1.001);
+  meshB.scale.setScalar(1.001);
+
+  return {
+    sheetTexture,
+    sheetImg: null,
+    frames: 1,
+    ctxA, ctxB,
+    // track textures to update
+    texA, texB, texA_tb, texB_tb,
+    matsA, matsB,
+    meshA, meshB,
+    rotateTopBottom
+  };
+}
+
+function drawFrame(ctx, img, idx){
+  ctx.clearRect(0,0,W,H);
+  ctx.drawImage(img, 0, idx*H, W,H, 0,0, W,H);
+}
+
+function ensureSheet(lightsObj){
+  if(!lightsObj.sheetTexture.image) return false;
+  if(lightsObj.sheetImg) return true;
+  lightsObj.sheetImg = lightsObj.sheetTexture.image;
+  lightsObj.frames = Math.max(1, Math.floor(lightsObj.sheetImg.height / H));
+  return true;
+}
+
+// Determine if a block is vertically sandwiched (has both above and below).
+function isYSandwiched(x,y,z){
+  return hasBlock(x, y-1, z) && hasBlock(x, y+1, z);
+}
+
+// Simple type decision remains the same (block vs column axis)
 function classifyAxis(x,y,z){
   const nx = hasBlock(x-1,y,z), px = hasBlock(x+1,y,z);
   const ny = hasBlock(x,y-1,z), py = hasBlock(x,y+1,z);
   const nz = hasBlock(x,y,z-1), pz = hasBlock(x,y,z+1);
 
+  // prefer axis with both sides connected if it is "pure" along that axis
   const cx = nx && px;
   const cy = ny && py;
   const cz = nz && pz;
@@ -114,141 +223,18 @@ function classifyAxis(x,y,z){
   return "block";
 }
 
-// ===== Top/Bottom rule you stated =====
-// If (on the same Y layer) there is a horizontal run (adjacent controllers) along X => top/bottom should look "pulled" to X (horizontal)
-// If run along Z => pulled to Z
-// Corners / junctions => keep default block top/bottom (no override)
-function topBottomModeFor(x,y,z){
-  const xRun = hasBlock(x-1,y,z) || hasBlock(x+1,y,z);
-  const zRun = hasBlock(x,y,z-1) || hasBlock(x,y,z+1);
-  if(xRun && !zRun) return "x";
-  if(zRun && !xRun) return "z";
-  return "none";
-}
-
-function makeBaseMat(mapTex){
-  return new THREE.MeshStandardMaterial({
-    map: mapTex,
-    emissiveMap: mapTex,
-    emissive: new THREE.Color(0xffffff),
-    emissiveIntensity: BASE_EMISSIVE
-  });
-}
-
-function rotatedTexFromColumn(rotQ){
-  if(rotQ === 0) return texColumnBase;
-  const t = mcClone(texColumnBase);
-  t.center.set(0.5,0.5);
-  t.rotation = rotQ * (Math.PI/2);
-  t.needsUpdate = true;
-  return t;
-}
-
-// ===== Lights (smooth crossfade) =====
-const W=16,H=16;
-
-function makeCanvasTex(canvas, rotQ){
-  const t = new THREE.CanvasTexture(canvas);
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.magFilter = THREE.NearestFilter;
-  t.minFilter = THREE.NearestFilter;
-  t.generateMipmaps = false;
-  if(rotQ){
-    t.center.set(0.5,0.5);
-    t.rotation = rotQ * (Math.PI/2);
-  }
-  return t;
-}
-
-function makeMat(tex, opacity){
-  return new THREE.MeshStandardMaterial({
-    map: tex,
-    emissiveMap: tex,
-    emissive: new THREE.Color(0xffffff),
-    emissiveIntensity: LIGHTS_EMISSIVE,
-    transparent:true,
-    opacity,
-    depthWrite:false
-  });
-}
-
-function drawFrame(ctx, img, idx){
-  ctx.clearRect(0,0,W,H);
-  ctx.drawImage(img, 0, idx*H, W,H, 0,0, W,H);
-}
-
-function makeAnimPair(){
-  const canvasA = document.createElement("canvas");
-  const canvasB = document.createElement("canvas");
-  canvasA.width = canvasB.width = W;
-  canvasA.height = canvasB.height = H;
-
-  const ctxA = canvasA.getContext("2d");
-  const ctxB = canvasB.getContext("2d");
-  ctxA.imageSmoothingEnabled = false;
-  ctxB.imageSmoothingEnabled = false;
-
-  const texA0  = makeCanvasTex(canvasA, 0);
-  const texB0  = makeCanvasTex(canvasB, 0);
-  const texA90 = makeCanvasTex(canvasA, 1);
-  const texB90 = makeCanvasTex(canvasB, 1);
-
-  return { canvasA, canvasB, ctxA, ctxB, texA0, texB0, texA90, texB90 };
-}
-
-// ===== Build one instance =====
-function makeInstance(x,y,z){
-  const type = classifyAxis(x,y,z);
+function makeBlock(type, rotateTopBottom){
   const isColumn = type.startsWith("column");
-  const baseTexDefault = isColumn ? texColumnBase : texBlockBase;
+  const baseTex = isColumn ? texColumnBase : texBlockBase;
 
-  // Determine top/bottom override requirements
-  const topExposed = !hasBlock(x, y+1, z);
-  const botExposed = !hasBlock(x, y-1, z);
-  const tbMode = topBottomModeFor(x,y,z);  // x / z / none
-  const tbRotQ = (tbMode === "x") ? 1 : 0; // x-run => rotate 90deg, z-run => 0deg
-
-  // ===== Base mesh materials per face =====
-  const baseMats = new Array(6);
-  for(let i=0;i<6;i++) baseMats[i] = makeBaseMat(baseTexDefault);
-
-  // Apply override ONLY for exposed top/bottom, and ONLY when tbMode != none
-  if(tbMode !== "none"){
-    const t = rotatedTexFromColumn(tbRotQ);
-    if(topExposed) baseMats[FACE_TOP] = makeBaseMat(t);
-    if(botExposed) baseMats[FACE_BOTTOM] = makeBaseMat(t);
-  }
-
+  // Base face materials (rotate top/bottom only when y-sandwiched)
+  const baseMats = makeFaceMaterials(baseTex, BASE_EMISSIVE, rotateTopBottom);
   const baseMesh = new THREE.Mesh(baseGeo, baseMats);
 
-  // ===== Lights: we animate BOTH sheets, then assign per-face =====
-  const animBlock = makeAnimPair();
-  const animCol   = makeAnimPair();
+  // Lights per-face materials
+  const lights = makeLightsLayer(isColumn ? texColumnSheet : texBlockSheet, rotateTopBottom);
 
-  // Side faces: default to (isColumn ? column sheet : block sheet)
-  // Top/bottom: if override => column sheet with rotation; else follow default
-  const matsA = new Array(6);
-  const matsB = new Array(6);
-  for(let fi=0; fi<6; fi++){
-    const useColumn = isColumn;
-    const A = useColumn ? animCol.texA0 : animBlock.texA0;
-    const B = useColumn ? animCol.texB0 : animBlock.texB0;
-    matsA[fi] = makeMat(A, 1);
-    matsB[fi] = makeMat(B, 0);
-  }
-  if(tbMode !== "none"){
-    const A = (tbMode === "x") ? animCol.texA90 : animCol.texA0;
-    const B = (tbMode === "x") ? animCol.texB90 : animCol.texB0;
-    if(topExposed){ matsA[FACE_TOP] = makeMat(A, 1); matsB[FACE_TOP] = makeMat(B, 0); }
-    if(botExposed){ matsA[FACE_BOTTOM] = makeMat(A, 1); matsB[FACE_BOTTOM] = makeMat(B, 0); }
-  }
-
-  const lightsA = new THREE.Mesh(baseGeo, matsA);
-  const lightsB = new THREE.Mesh(baseGeo, matsB);
-  lightsA.scale.setScalar(1.001);
-  lightsB.scale.setScalar(1.001);
-
-  // ===== Inside =====
+  // Inside (keep as before; no special rotation applied)
   const insideMat = new THREE.MeshStandardMaterial({
     map: insideATex,
     emissiveMap: insideATex,
@@ -257,10 +243,10 @@ function makeInstance(x,y,z){
   });
   const insideMesh = new THREE.Mesh(insideGeo, insideMat);
 
-  // ===== Group + AE2-like rotations for column axis (restores good side behavior) =====
   const group = new THREE.Group();
-  group.add(baseMesh, lightsA, lightsB, insideMesh);
+  group.add(baseMesh, lights.meshA, lights.meshB, insideMesh);
 
+  // Match AE2 blockstate rotations for column variants:
   // column_y: no rotation
   // column_z: x=90
   // column_x: x=90, y=90
@@ -271,38 +257,21 @@ function makeInstance(x,y,z){
     group.rotation.y = Math.PI / 2;
   }
 
-  group.position.set(x*SPACING, y*SPACING, z*SPACING);
-
-  return {
-    group,
-    animBlock,
-    animCol,
-    matsA, matsB,
-    insideMesh,
-    blockImg: null, colImg: null,
-    blockFrames: 1, colFrames: 1
-  };
+  return { group, baseMesh, lights, insideMesh, rotateTopBottom };
 }
 
-function ensureSheets(inst){
-  if(!inst.blockImg && texBlockSheet.image){
-    inst.blockImg = texBlockSheet.image;
-    inst.blockFrames = Math.max(1, Math.floor(inst.blockImg.height / H));
-  }
-  if(!inst.colImg && texColumnSheet.image){
-    inst.colImg = texColumnSheet.image;
-    inst.colFrames = Math.max(1, Math.floor(inst.colImg.height / H));
-  }
-  return !!(inst.blockImg && inst.colImg);
-}
-
-// ===== Build structure =====
+// Build instances
 const instances = [];
 for(let x=0;x<GRID_SIZE;x++){
   for(let y=0;y<GRID_SIZE;y++){
     for(let z=0;z<GRID_SIZE;z++){
       if(!hasBlock(x,y,z)) continue;
-      const inst = makeInstance(x,y,z);
+
+      const type = classifyAxis(x,y,z);
+      const rotateTopBottom = isYSandwiched(x,y,z); // <-- fix requested: top/bottom when "挟まれている"
+      const inst = makeBlock(type, rotateTopBottom);
+
+      inst.group.position.set(x*SPACING, y*SPACING, z*SPACING);
       scene.add(inst.group);
       instances.push(inst);
     }
@@ -315,39 +284,28 @@ const start = performance.now();
 function animate(){
   const t = (performance.now()-start)/FRAME_MS;
   const i = Math.floor(t);
-  const f = t - i;
-
+  const f = t - i; // 0..1
   const useA = (i % 2) === 0;
   const itex = useA ? insideATex : insideBTex;
 
   for(const inst of instances){
-    if(ensureSheets(inst)){
-      // draw frames for block sheet
-      const bi = i % inst.blockFrames;
-      const bn = (bi + 1) % inst.blockFrames;
-      drawFrame(inst.animBlock.ctxA, inst.blockImg, bi);
-      drawFrame(inst.animBlock.ctxB, inst.blockImg, bn);
+    const L = inst.lights;
+    if(ensureSheet(L)){
+      const frame = i % L.frames;
+      const next = (frame + 1) % L.frames;
 
-      // draw frames for column sheet
-      const ci = i % inst.colFrames;
-      const cn = (ci + 1) % inst.colFrames;
-      drawFrame(inst.animCol.ctxA, inst.colImg, ci);
-      drawFrame(inst.animCol.ctxB, inst.colImg, cn);
+      drawFrame(L.ctxA, L.sheetImg, frame);
+      drawFrame(L.ctxB, L.sheetImg, next);
 
-      // update all textures that reference canvases
-      inst.animBlock.texA0.needsUpdate = true;
-      inst.animBlock.texB0.needsUpdate = true;
-      inst.animBlock.texA90.needsUpdate = true;
-      inst.animBlock.texB90.needsUpdate = true;
+      // update all relevant textures (including rotated top/bottom variants)
+      L.texA.needsUpdate = true;
+      L.texB.needsUpdate = true;
+      if(L.texA_tb) L.texA_tb.needsUpdate = true;
+      if(L.texB_tb) L.texB_tb.needsUpdate = true;
 
-      inst.animCol.texA0.needsUpdate = true;
-      inst.animCol.texB0.needsUpdate = true;
-      inst.animCol.texA90.needsUpdate = true;
-      inst.animCol.texB90.needsUpdate = true;
-
-      // crossfade on all faces
-      for(const m of inst.matsA) m.opacity = 1 - f;
-      for(const m of inst.matsB) m.opacity = f;
+      // set opacity on all face materials
+      for(const m of L.matsA) m.opacity = 1 - f;
+      for(const m of L.matsB) m.opacity = f;
     }
 
     inst.insideMesh.material.map = itex;
@@ -356,7 +314,7 @@ function animate(){
   }
 
   controls.update();
-  renderer.render(scene, camera);
+  renderer.render(scene,camera);
   requestAnimationFrame(animate);
 }
 animate();
@@ -364,5 +322,5 @@ animate();
 addEventListener("resize", ()=>{
   camera.aspect = innerWidth/innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
+  renderer.setSize(innerWidth,innerHeight);
 });
