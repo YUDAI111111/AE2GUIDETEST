@@ -3,81 +3,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-
-
-// -------------------------------
-// Debug HUD: Compass that rotates with the 3D camera (北/東/南/西)
-// -------------------------------
-function createCompassHUD() {
-  if (document.getElementById("hud-compass")) {
-    // already present
-  } else {
-    const style = document.createElement("style");
-    style.id = "hud-compass-style";
-    style.textContent = `
-      #hud-compass{
-        position: fixed;
-        left: 12px;
-        top: 12px;
-        width: 120px;
-        height: 120px;
-        pointer-events: none;
-        z-index: 9999;
-        font: 700 13px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
-        color: #fff;
-        text-shadow: 0 1px 2px rgba(0,0,0,.9);
-      }
-      #hud-compass .ring{
-        position:absolute; inset:0;
-        border-radius: 999px;
-        border: 1px solid rgba(255,255,255,.25);
-        background: rgba(0,0,0,.18);
-        backdrop-filter: blur(4px);
-      }
-      #hud-compass .wheel{
-        position:absolute; inset:0;
-        transform-origin: 50% 50%;
-      }
-      #hud-compass .lbl{
-        position:absolute;
-        padding: 5px 7px;
-        border-radius: 10px;
-        background: rgba(0,0,0,.35);
-      }
-      #hud-compass .n{ left:50%; top:6px; transform: translateX(-50%); }
-      #hud-compass .s{ left:50%; bottom:6px; transform: translateX(-50%); }
-      #hud-compass .w{ left:6px; top:50%; transform: translateY(-50%); }
-      #hud-compass .e{ right:6px; top:50%; transform: translateY(-50%); }
-    `;
-    document.head.appendChild(style);
-
-    const hud = document.createElement("div");
-    hud.id = "hud-compass";
-    hud.setAttribute("aria-hidden", "true");
-    hud.innerHTML = `
-      <div class="ring"></div>
-      <div class="wheel" id="hud-compass-wheel">
-        <div class="lbl n">北</div>
-        <div class="lbl e">東</div>
-        <div class="lbl s">南</div>
-        <div class="lbl w">西</div>
-      </div>
-    `;
-    document.body.appendChild(hud);
-  }
-
-  const wheel = document.getElementById("hud-compass-wheel");
-  const dir = new THREE.Vector3();
-
-  return (camera) => {
-    if (!wheel || !camera) return;
-    camera.getWorldDirection(dir);
-    // heading: 0 when facing North (-Z), +90° when facing East (+X)
-    const heading = Math.atan2(dir.x, -dir.z);
-    wheel.style.transform = `rotate(${heading}rad)`;
-  };
-}
-
 function fatal(e) {
   console.error(e);
   const pre = document.createElement("pre");
@@ -105,14 +30,11 @@ try {
   document.body.style.overflow = "hidden";
   document.body.appendChild(renderer.domElement);
 
-
-  const updateCompass = createCompassHUD();
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.target.set(0, 0, 0);
   controls.update();
 
-    updateCompass(camera);
   scene.add(new THREE.HemisphereLight(0xffffff, 0x202020, 0.8));
   const dir = new THREE.DirectionalLight(0xffffff, 1.0);
   dir.position.set(6, 10, 6);
@@ -447,6 +369,78 @@ try {
       }
     }
   }
+
+  // -------------------------------
+  // Debug: world compass labels inside the 3D scene (北/東/南/西)
+  // -------------------------------
+  function makeCompassSprite(label) {
+    const size = 128;
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d");
+
+    // background
+    ctx.clearRect(0, 0, size, size);
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, size * 0.46, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(0,0,0,0.45)";
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(255,255,255,0.65)";
+    ctx.stroke();
+
+    // text
+    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    ctx.font = "800 56px system-ui, -apple-system, Segoe UI, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, size / 2, size / 2 + 2);
+
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.needsUpdate = true;
+
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+    mat.depthTest = false;   // keep readable even if behind blocks
+    mat.depthWrite = false;
+
+    const spr = new THREE.Sprite(mat);
+    spr.renderOrder = 9999;
+    spr.scale.set(0.9, 0.9, 0.9);
+    return spr;
+  }
+
+  function addWorldCompassLabels() {
+    if (!instances.length) return;
+
+    const box = new THREE.Box3();
+    for (const inst of instances) box.expandByObject(inst.group);
+
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const margin = Math.max(size.x, size.z) * 0.20 + 0.35;
+
+    const north = makeCompassSprite("北"); // -Z
+    const south = makeCompassSprite("南"); // +Z
+    const west  = makeCompassSprite("西"); // -X
+    const east  = makeCompassSprite("東"); // +X
+
+    // place at mid-height, outside each side
+    const y = center.y;
+
+    north.position.set(center.x, y, box.min.z - margin);
+    south.position.set(center.x, y, box.max.z + margin);
+    west.position.set(box.min.x - margin, y, center.z);
+    east.position.set(box.max.x + margin, y, center.z);
+
+    scene.add(north, south, west, east);
+  }
+
+  addWorldCompassLabels();
+
+
+
 
   // -------------------------------
   // Animate lights
