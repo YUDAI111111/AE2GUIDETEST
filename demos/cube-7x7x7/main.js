@@ -62,14 +62,19 @@ try {
   const OFFSET = (GRID_SIZE - 1) * 0.5 * SPACING; // 3.0
 
   // -------------------------------
-  // Layout: 7×7, Layers 1–3 only (top-down numbering 1..49, 4番側が北)
-  // - Layer 1: blocks exist except blanks {4,9,13,18,22,24,25,26,28,32,37,41,46}
-  // - Layer 2: blocks exist at {1,3,4,5,7,15,17,18,19,21,22,24,26,28,29,31,32,33,35,43,45,46,47,49}
-  // - Layer 3: same as Layer 1
-  // Y mapping (7-high world): layer1->y=6, layer2->y=5, layer3->y=4
-  // -------------------------------
+  // Layout: 7×7, Layers 1–7 (top-down numbering 1..49, 4番側が北)
+// - Layer 1: blocks exist except blanks {4, 9, 13, 18, 22, 24, 25, 26, 28, 32, 37, 41, 46}
+// - Layer 2: blocks exist at {1, 3, 4, 5, 7, 15, 17, 18, 19, 21, 22, 24, 26, 28, 29, 31, 32, 33, 35, 43, 45, 46, 47, 49}
+// - Layer 3: same as Layer 1
+// - Layer 4: blocks exist at {2, 6, 8, 10, 12, 14, 16, 20, 30, 34, 36, 38, 40, 42, 44, 48}
+// - Layer 5: same as Layer 1
+// - Layer 6: same as Layer 2
+// - Layer 7: same as Layer 1
+// Y mapping (7-high world): layer1->y=6 ... layer7->y=0
+// -------------------------------
   const layer1Blanks = new Set([4, 9, 13, 18, 22, 24, 25, 26, 28, 32, 37, 41, 46]);
-  const layer2Filled = new Set([1,3,4,5,7,15,17,18,19,21,22,24,26,28,29,31,32,33,35,43,45,46,47,49]);
+  const layer2Filled = new Set([1, 3, 4, 5, 7, 15, 17, 18, 19, 21, 22, 24, 26, 28, 29, 31, 32, 33, 35, 43, 45, 46, 47, 49]);
+  const layer4Filled = new Set([2, 6, 8, 10, 12, 14, 16, 20, 30, 34, 36, 38, 40, 42, 44, 48]);
 
   const key = (x, y, z) => `${x},${y},${z}`;
   const placed = new Set();
@@ -94,6 +99,14 @@ try {
   placeLayerFromRule(5, (idx) => layer2Filled.has(idx));
   // Layer 3 (y=4): same as Layer 1
   placeLayerFromRule(4, (idx) => !layer1Blanks.has(idx));
+  // Layer 4 (y=3): filled when listed
+  placeLayerFromRule(3, (idx) => layer4Filled.has(idx));
+  // Layer 5 (y=2): same as Layer 1
+  placeLayerFromRule(2, (idx) => !layer1Blanks.has(idx));
+  // Layer 6 (y=1): same as Layer 2
+  placeLayerFromRule(1, (idx) => layer2Filled.has(idx));
+  // Layer 7 (y=0): same as Layer 1
+  placeLayerFromRule(0, (idx) => !layer1Blanks.has(idx));
 
   const hasBlock = (x, y, z) => placed.has(key(x, y, z));
 // -------------------------------
@@ -381,7 +394,15 @@ try {
       for (let z = 0; z < GRID_SIZE; z++) {
         if (!hasBlock(x, y, z)) continue;
         const inst = makeInstance(x, y, z);
-          const layerIndex = (y === 6) ? 0 : (y === 5) ? 1 : (y === 4) ? 2 : -1;
+          const layerIndex =
+    (y === 6) ? 0 :
+    (y === 5) ? 1 :
+    (y === 4) ? 2 :
+    (y === 3) ? 3 :
+    (y === 2) ? 4 :
+    (y === 1) ? 5 :
+    (y === 0) ? 6 :
+    -1;
   if (layerIndex >= 0) layerGroups[layerIndex].add(inst.group);
   else scene.add(inst.group);
 instances.push(inst);
@@ -540,24 +561,31 @@ instances.push(inst);
       { x0: 4, z0: 4 },
     ];
 
-    const minY = 4, maxY = 6;
+    const applyHotfixForYRange = (minY, maxY) => {
+      for (const c of corners) {
+        const midX = c.x0 + 1;
+        const minZ = c.z0;
+        const maxZ = c.z0 + 2;
 
-    for (const c of corners) {
-      const midX = c.x0 + 1;
-      const minZ = c.z0;
-      const maxZ = c.z0 + 2;
+        const targets = [
+          { x: midX, y: maxY, z: minZ },
+          { x: midX, y: minY, z: minZ },
+          { x: midX, y: maxY, z: maxZ },
+          { x: midX, y: minY, z: maxZ },
+        ];
 
-      const targets = [
-        { x: midX, y: maxY, z: minZ },
-        { x: midX, y: minY, z: minZ },
-        { x: midX, y: maxY, z: maxZ },
-        { x: midX, y: minY, z: maxZ },
-      ];
-
-      for (const t of targets) {
-        const inst = findInst(t.x, t.y, t.z);
-        if (inst) rotateBlockTextures(inst.group, Q);
+        for (const t of targets) {
+          const inst = findInst(t.x, t.y, t.z);
+          if (inst) rotateBlockTextures(inst.group, Q);
+        }
       }
+    };
+
+    // Top 3 layers (1..3): y=6,5,4
+    applyHotfixForYRange(4, 6);
+    // Bottom 3 layers (5..7): y=2,1,0
+    applyHotfixForYRange(0, 2);
+
     }
 
 
@@ -616,7 +644,7 @@ instances.push(inst);
 
     // Layers 1..7
     for (let i = 0; i < 7; i++) {
-      const initial = (i < 3); // layers 1..3 exist now
+      const initial = true; // layers 1..7
       layerGroups[i].visible = initial;
       panel.appendChild(
         mkRow(`Layer ${i + 1}`, initial, (v) => (layerGroups[i].visible = v))
