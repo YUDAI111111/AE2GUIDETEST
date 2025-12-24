@@ -38,7 +38,9 @@ try {
   camera.position.set(11.0, 11.0, 13.5);
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setSize(innerWidth, innerHeight);
+
+  // Render-on-demand helpers (must be defined early; used by wheel/UI handlers)
+renderer.setSize(innerWidth, innerHeight);
     __requestRender();
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   document.body.style.margin = "0";
