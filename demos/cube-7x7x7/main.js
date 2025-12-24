@@ -630,6 +630,7 @@ instances.push(inst);
   // -------------------------------
   // UI: Layer visibility + Compass toggle
   // -------------------------------
+
   function createVisibilityPanel() {
     const panel = document.createElement("div");
     panel.id = "visibility-panel";
@@ -645,7 +646,8 @@ instances.push(inst);
       "font:12px/1.3 system-ui,-apple-system,Segoe UI,sans-serif",
       "backdrop-filter: blur(4px)",
       "pointer-events:auto",
-      "user-select:none"
+      "user-select:none",
+      "max-width:220px"
     ].join(";");
 
     const title = document.createElement("div");
@@ -672,16 +674,17 @@ instances.push(inst);
 
     // Layers 1..7
     for (let i = 0; i < 7; i++) {
-      const initial = true; // layers 1..7
+      const initial = true;
       layerGroups[i].visible = initial;
       panel.appendChild(
-        mkRow(`Layer ${i + 1}
+        mkRow(`Layer ${i + 1}`, initial, (v) => (layerGroups[i].visible = v))
+      );
+    }
 
-    // Lights (performance)
+    // Lights
     panel.appendChild(
       mkRow("Lights", true, (v) => {
         LIGHTS_ENABLED = v;
-        // Toggle existing lights meshes without rebuilding:
         for (const inst of instances) {
           if (!inst.lights) continue;
           inst.lights.meshA.visible = v;
@@ -690,6 +693,7 @@ instances.push(inst);
       })
     );
 
+    // Lights FPS
     const fpsRow = document.createElement("div");
     fpsRow.style.cssText = "display:flex;gap:8px;margin:6px 0;align-items:center;";
     const fpsLabel = document.createElement("span");
@@ -707,20 +711,17 @@ instances.push(inst);
     fpsRow.appendChild(mkFpsBtn(6));
     fpsRow.appendChild(mkFpsBtn(12));
     panel.appendChild(fpsRow);
-`, initial, (v) => (layerGroups[i].visible = v))
-      );
-    }
+
+    // Separator
+    const hr = document.createElement("hr");
+    hr.style.cssText = "border:none;border-top:1px solid rgba(255,255,255,.18);margin:10px 0;";
+    panel.appendChild(hr);
 
     // Compass
     compassGroup.visible = true;
-    panel.appendChild(document.createElement("hr")).style.cssText =
-      "border:none;border-top:1px solid rgba(255,255,255,.18);margin:10px 0;";
-
     panel.appendChild(
       mkRow("Compass", true, (v) => (compassGroup.visible = v))
     );
-
-    
 
     // Reset view
     const btn = document.createElement("button");
@@ -741,7 +742,8 @@ instances.push(inst);
       controls.update();
     });
     panel.appendChild(btn);
-document.body.appendChild(panel);
+
+    document.body.appendChild(panel);
   }
 
   createVisibilityPanel();
