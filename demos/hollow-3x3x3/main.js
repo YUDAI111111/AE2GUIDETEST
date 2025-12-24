@@ -328,7 +328,7 @@ layer.ready = true;
     const topBottomRotation = topBottomRotationFor(pullAxis);
 
     
-    const sideRotationLR = (pullAxis === \"z\") ? (Math.PI / 2) : null;
+    const sideRotationLR = (pullAxis === "z") ? (Math.PI / 2) : null;
 const isColumn = type.startsWith("column");
     const baseTex = isColumn ? texColumnBase : texBlockBase;
 
