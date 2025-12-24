@@ -3,6 +3,63 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
+// -------------------------------
+// Debug HUD: fixed compass labels (北/東/南/西) outside the 3D view
+// -------------------------------
+(function injectCompassHUD() {
+  const run = () => {
+    if (document.getElementById("hud-compass")) return;
+
+    // style
+    if (!document.getElementById("hud-compass-style")) {
+      const style = document.createElement("style");
+      style.id = "hud-compass-style";
+      style.textContent = `
+        #hud-compass{
+          position: fixed;
+          inset: 12px;
+          pointer-events: none;
+          z-index: 9999;
+          font: 700 14px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+          color: #fff;
+          text-shadow: 0 1px 2px rgba(0,0,0,.8);
+        }
+        #hud-compass .c{
+          position: absolute;
+          padding: 6px 10px;
+          border-radius: 10px;
+          background: rgba(0,0,0,.35);
+          backdrop-filter: blur(4px);
+        }
+        #hud-compass .n{ top: 0; left: 50%; transform: translateX(-50%); }
+        #hud-compass .s{ bottom: 0; left: 50%; transform: translateX(-50%); }
+        #hud-compass .w{ left: 0; top: 50%; transform: translateY(-50%); }
+        #hud-compass .e{ right: 0; top: 50%; transform: translateY(-50%); }
+      `;
+      document.head.appendChild(style);
+    }
+
+    // hud
+    const hud = document.createElement("div");
+    hud.id = "hud-compass";
+    hud.setAttribute("aria-hidden", "true");
+    hud.innerHTML = `
+      <div class="c n">北</div>
+      <div class="c e">東</div>
+      <div class="c s">南</div>
+      <div class="c w">西</div>
+    `;
+    document.body.appendChild(hud);
+  };
+
+  if (document.readyState === "loading") {
+    window.addEventListener("DOMContentLoaded", run, { once: true });
+  } else {
+    run();
+  }
+})();
+
+
 function fatal(e) {
   console.error(e);
   const pre = document.createElement("pre");
@@ -177,7 +234,7 @@ try {
   const BASE_EMISSIVE = 0.45;
   const INSIDE_EMISSIVE = 0.75;
 
-  function makeBaseMaterials(baseTexture, topBottomRotation, sideRotationLR) {
+  function makeBaseMaterials(baseTexture, topBottomRotation) {
     const makeMat = (t) =>
       new THREE.MeshStandardMaterial({
         map: t,
@@ -186,10 +243,8 @@ try {
         emissiveIntensity: BASE_EMISSIVE,
       });
 
-    // default: no per-face rotation
     const mats = Array(6).fill(null).map(() => makeMat(baseTexture));
 
-    // Rotate ONLY TOP/BOTTOM when needed (unique texture instances).
     if (topBottomRotation != null) {
       const topTex = baseTexture.clone();
       const botTex = baseTexture.clone();
@@ -203,22 +258,6 @@ try {
       mats[FACE_TOP] = makeMat(topTex);
       mats[FACE_BOTTOM] = makeMat(botTex);
     }
-
-    // For Z-axis columns, LEFT/RIGHT faces may need an extra 90deg to match the AE2 texture orientation.
-    if (sideRotationLR != null) {
-      const leftTex = baseTexture.clone();
-      const rightTex = baseTexture.clone();
-      leftTex.center.set(0.5, 0.5);
-      rightTex.center.set(0.5, 0.5);
-      leftTex.rotation = sideRotationLR;
-      rightTex.rotation = sideRotationLR;
-      leftTex.needsUpdate = true;
-      rightTex.needsUpdate = true;
-
-      mats[FACE_LEFT] = makeMat(leftTex);
-      mats[FACE_RIGHT] = makeMat(rightTex);
-    }
-
     return mats;
   }
 
@@ -249,7 +288,7 @@ try {
     ctx.drawImage(img, 0, idx * H, W, H, 0, 0, W, H);
   }
 
-  function makeLightsLayer(sheetUrl, topBottomRotation, sideRotationLR) {
+  function makeLightsLayer(sheetUrl, topBottomRotation) {
     const canvasA = document.createElement("canvas");
     const canvasB = document.createElement("canvas");
     canvasA.width = W; canvasA.height = H;
@@ -262,9 +301,6 @@ try {
     const texB = mkCanvasTex(canvasB, null);
     const texA_tb = topBottomRotation != null ? mkCanvasTex(canvasA, topBottomRotation) : null;
     const texB_tb = topBottomRotation != null ? mkCanvasTex(canvasB, topBottomRotation) : null;
-
-    const texA_lr = sideRotationLR != null ? mkCanvasTex(canvasA, sideRotationLR) : null;
-    const texB_lr = sideRotationLR != null ? mkCanvasTex(canvasB, sideRotationLR) : null;
 
     const makeLightMat = (t) =>
       new THREE.MeshStandardMaterial({
@@ -302,7 +338,6 @@ try {
       ready: false,
       ctxA, ctxB,
       texA, texB, texA_tb, texB_tb,
-      texA_lr, texB_lr,
       matsA, matsB,
       meshA, meshB,
       topBottomRotation,
@@ -313,12 +348,12 @@ try {
       drawFrame(layer.ctxA, img, 0);
       layer.texA.needsUpdate = true;
       if (layer.texA_tb) layer.texA_tb.needsUpdate = true;
-      if (layer.texA_lr) layer.texA_lr.needsUpdate = true;
-drawFrame(layer.ctxB, img, 1 % layer.frames);
+
+      drawFrame(layer.ctxB, img, 1 % layer.frames);
       layer.texB.needsUpdate = true;
       if (layer.texB_tb) layer.texB_tb.needsUpdate = true;
-      if (layer.texB_lr) layer.texB_lr.needsUpdate = true;
-layer.ready = true;
+
+      layer.ready = true;
     };
 
     img.onerror = (e) => {
@@ -338,17 +373,15 @@ layer.ready = true;
     const pullAxis = pullAxisFor(x, y, z);
     const topBottomRotation = topBottomRotationFor(pullAxis);
 
-    
-    const sideRotationLR = (pullAxis === "z") ? (Math.PI / 2) : null;
-const isColumn = type.startsWith("column");
+    const isColumn = type.startsWith("column");
     const baseTex = isColumn ? texColumnBase : texBlockBase;
 
-    const baseMats = makeBaseMaterials(baseTex, topBottomRotation, sideRotationLR);
+    const baseMats = makeBaseMaterials(baseTex, topBottomRotation);
     const baseMesh = new THREE.Mesh(baseGeo, baseMats);
 
     // lights
     const sheetUrl = isColumn ? LIGHT_SHEET_COLUMN_URL : LIGHT_SHEET_BLOCK_URL;
-    const lights = makeLightsLayer(sheetUrl, topBottomRotation, sideRotationLR);
+    const lights = makeLightsLayer(sheetUrl, topBottomRotation);
 
     // inside overlay (only for inside)
     let insideMesh = null;
@@ -426,12 +459,11 @@ const isColumn = type.startsWith("column");
         drawFrame(l.ctxA, l.img, a);
         l.texA.needsUpdate = true;
         if (l.texA_tb) l.texA_tb.needsUpdate = true;
-        if (l.texA_lr) l.texA_lr.needsUpdate = true;
-drawFrame(l.ctxB, l.img, b);
+
+        drawFrame(l.ctxB, l.img, b);
         l.texB.needsUpdate = true;
         if (l.texB_tb) l.texB_tb.needsUpdate = true;
-        if (l.texB_lr) l.texB_lr.needsUpdate = true;
-}
+      }
     }
 
     // apply crossfade
