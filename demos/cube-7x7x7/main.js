@@ -45,7 +45,25 @@ try {
   document.body.appendChild(renderer.domElement);
 
   const controls = new OrbitControls(camera, renderer.domElement);
+  
+  // Controls tuning:
+  // - disable panning to avoid "where did it go?" after zooming
+  // - disable dolly-to-cursor behavior (trackpads can feel like drifting)
+  // - set sane min/max distance and provide a reset button in UI
+  controls.enablePan = false;
   controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.zoomSpeed = 0.85;
+  controls.rotateSpeed = 0.55;
+  controls.minDistance = 4.0;
+  controls.maxDistance = 80.0;
+  controls.screenSpacePanning = false;
+  if ("dollyToCursor" in controls) controls.dollyToCursor = false;
+  // Touch: avoid 2-finger pan (use dolly+rotate)
+  if (controls.touches && typeof THREE !== "undefined" && THREE.TOUCH && THREE.TOUCH.DOLLY_ROTATE != null) {
+    controls.touches.TWO = THREE.TOUCH.DOLLY_ROTATE;
+  }
+controls.enableDamping = true;
   controls.target.set(0, 0, 0);
   controls.update();
 
@@ -236,6 +254,9 @@ try {
 
   // -------------------------------
   // Lights (sprite-sheet -> canvas textures -> crossfade)
+  let LIGHTS_ENABLED = true;
+  let LIGHTS_FPS = 6; // reduced for performance
+
   // -------------------------------
   const W = 16, H = 16;
 
@@ -261,7 +282,7 @@ try {
     ctx.drawImage(img, 0, idx * H, W, H, 0, 0, W, H);
   }
 
-  function makeLightsLayer(sheetUrl, topBottomRotation) {
+  function makeLightsLayer(sheetUrl, topBottomRotation, faceVisibleMask) {
     const canvasA = document.createElement("canvas");
     const canvasB = document.createElement("canvas");
     canvasA.width = W; canvasA.height = H;
@@ -346,7 +367,17 @@ try {
     const pullAxis = pullAxisFor(x, y, z);
     const topBottomRotation = topBottomRotationFor(pullAxis);
 
-    const isColumn = type.startsWith("column");
+    
+
+    const faceMask = [
+      !hasBlock(x + 1, y, z), // RIGHT
+      !hasBlock(x - 1, y, z), // LEFT
+      !hasBlock(x, y + 1, z), // TOP
+      !hasBlock(x, y - 1, z), // BOTTOM
+      !hasBlock(x, y, z + 1), // FRONT (south)
+      !hasBlock(x, y, z - 1), // BACK (north)
+    ];
+const isColumn = type.startsWith("column");
     const baseTex = isColumn ? texColumnBase : texBlockBase;
 
     const baseMats = makeBaseMaterials(baseTex, topBottomRotation);
@@ -354,7 +385,7 @@ try {
 
     // lights
     const sheetUrl = isColumn ? LIGHT_SHEET_COLUMN_URL : LIGHT_SHEET_BLOCK_URL;
-    const lights = makeLightsLayer(sheetUrl, topBottomRotation);
+    const lights = LIGHTS_ENABLED ? makeLightsLayer(sheetUrl, topBottomRotation, faceMask) : null;
 
     // inside overlay (only for inside)
     let insideMesh = null;
@@ -644,7 +675,39 @@ instances.push(inst);
       const initial = true; // layers 1..7
       layerGroups[i].visible = initial;
       panel.appendChild(
-        mkRow(`Layer ${i + 1}`, initial, (v) => (layerGroups[i].visible = v))
+        mkRow(`Layer ${i + 1}
+
+    // Lights (performance)
+    panel.appendChild(
+      mkRow("Lights", true, (v) => {
+        LIGHTS_ENABLED = v;
+        // Toggle existing lights meshes without rebuilding:
+        for (const inst of instances) {
+          if (!inst.lights) continue;
+          inst.lights.meshA.visible = v;
+          inst.lights.meshB.visible = v;
+        }
+      })
+    );
+
+    const fpsRow = document.createElement("div");
+    fpsRow.style.cssText = "display:flex;gap:8px;margin:6px 0;align-items:center;";
+    const fpsLabel = document.createElement("span");
+    fpsLabel.textContent = "Lights FPS";
+    fpsLabel.style.cssText = "opacity:.85;min-width:70px;";
+    const mkFpsBtn = (v) => {
+      const b = document.createElement("button");
+      b.textContent = String(v);
+      b.style.cssText = "padding:6px 8px;border-radius:10px;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);color:#fff;cursor:pointer;";
+      b.addEventListener("click", () => { LIGHTS_FPS = v; });
+      return b;
+    };
+    fpsRow.appendChild(fpsLabel);
+    fpsRow.appendChild(mkFpsBtn(3));
+    fpsRow.appendChild(mkFpsBtn(6));
+    fpsRow.appendChild(mkFpsBtn(12));
+    panel.appendChild(fpsRow);
+`, initial, (v) => (layerGroups[i].visible = v))
       );
     }
 
@@ -657,7 +720,28 @@ instances.push(inst);
       mkRow("Compass", true, (v) => (compassGroup.visible = v))
     );
 
-    document.body.appendChild(panel);
+    
+
+    // Reset view
+    const btn = document.createElement("button");
+    btn.textContent = "Reset View";
+    btn.style.cssText = [
+      "margin-top:10px",
+      "width:100%",
+      "padding:8px 10px",
+      "border-radius:10px",
+      "border:1px solid rgba(255,255,255,.22)",
+      "background:rgba(255,255,255,.08)",
+      "color:#fff",
+      "cursor:pointer"
+    ].join(";");
+    btn.addEventListener("click", () => {
+      camera.position.set(11.0, 11.0, 13.5);
+      controls.target.set(0, 0, 0);
+      controls.update();
+    });
+    panel.appendChild(btn);
+document.body.appendChild(panel);
   }
 
   createVisibilityPanel();
