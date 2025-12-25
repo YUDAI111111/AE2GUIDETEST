@@ -321,7 +321,7 @@ controls.enableDamping = true;
   }
 
   // Patch MeshStandardMaterial to blend map(A) and mapB with a shared mixAlpha uniform.
-  function makeCrossfadeLightMat(mapA, mapB, sharedMixAlpha) {
+  function makeCrossfadeLightMat(mapA, mapB, sharedMixAlpha, uvRot) {
     const mat = new THREE.MeshStandardMaterial({
       map: mapA,
       transparent: true,
@@ -333,22 +333,25 @@ controls.enableDamping = true;
     });
 
     mat.userData.__mixAlpha = sharedMixAlpha;
+    mat.userData.__uvRot = uvRot || 0.0;
 
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.mapB = { value: mapB };
       shader.uniforms.mixAlpha = sharedMixAlpha;
+      shader.uniforms.uvRot = { value: mat.userData.__uvRot };
 
       shader.fragmentShader = shader.fragmentShader.replace(
         "#include <common>",
-        "#include <common>\nuniform sampler2D mapB;\nuniform float mixAlpha;"
+        "#include <common>\nuniform sampler2D mapB;\nuniform float mixAlpha;\nuniform float uvRot;\n\nvec2 __rotUv(vec2 uv, float a){\n  if(a==0.0) return uv;\n  uv -= vec2(0.5);\n  float s = sin(a);\n  float c = cos(a);\n  uv = mat2(c,-s,s,c) * uv;\n  uv += vec2(0.5);\n  return uv;\n}"
       );
 
       shader.fragmentShader = shader.fragmentShader.replace(
         "#include <map_fragment>",
         `
 #ifdef USE_MAP
-  vec4 texelColorA = texture2D( map, vMapUv );
-  vec4 texelColorB = texture2D( mapB, vMapUv );
+  vec2 __uvA = __rotUv( vMapUv, uvRot );
+  vec4 texelColorA = texture2D( map, __uvA );
+  vec4 texelColorB = texture2D( mapB, __uvA );
   vec4 texelColor = mix( texelColorA, texelColorB, mixAlpha );
   texelColor = mapTexelToLinear( texelColor );
   diffuseColor *= texelColor;
@@ -360,8 +363,9 @@ controls.enableDamping = true;
         "#include <emissivemap_fragment>",
         `
 #ifdef USE_EMISSIVEMAP
-  vec4 emissiveColorA = texture2D( emissiveMap, vEmissiveMapUv );
-  vec4 emissiveColorB = texture2D( mapB, vEmissiveMapUv );
+  vec2 __uvE = __rotUv( vEmissiveMapUv, uvRot );
+  vec4 emissiveColorA = texture2D( emissiveMap, __uvE );
+  vec4 emissiveColorB = texture2D( mapB, __uvE );
   emissiveColorA = emissiveMapTexelToLinear( emissiveColorA );
   emissiveColorB = emissiveMapTexelToLinear( emissiveColorB );
   totalEmissiveRadiance *= mix( emissiveColorA.rgb, emissiveColorB.rgb, mixAlpha );
@@ -395,17 +399,31 @@ controls.enableDamping = true;
     const sharedMixAlpha = { value: 0.0 };
 
     const matsVisible = [];
-    matsVisible[FACE_RIGHT] = makeCrossfadeLightMat(texA, texB, sharedMixAlpha);
-    matsVisible[FACE_LEFT]  = makeCrossfadeLightMat(texA, texB, sharedMixAlpha);
-    matsVisible[FACE_FRONT] = makeCrossfadeLightMat(texA, texB, sharedMixAlpha);
-    matsVisible[FACE_BACK]  = makeCrossfadeLightMat(texA, texB, sharedMixAlpha);
+    matsVisible[FACE_RIGHT] = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
+    matsVisible[FACE_LEFT]  = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
+    matsVisible[FACE_FRONT] = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
+    matsVisible[FACE_BACK]  = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
 
     if (topBottomRotation != null) {
-      matsVisible[FACE_TOP]    = makeCrossfadeLightMat(texA_tb, texB_tb, sharedMixAlpha);
-      matsVisible[FACE_BOTTOM] = makeCrossfadeLightMat(texA_tb, texB_tb, sharedMixAlpha);
+      matsVisible[FACE_TOP]    = makeCrossfadeLightMat(texA_tb, texB_tb, sharedMixAlpha, 0.0);
+      matsVisible[FACE_BOTTOM] = makeCrossfadeLightMat(texA_tb, texB_tb, sharedMixAlpha, 0.0);
     } else {
-      matsVisible[FACE_TOP]    = makeCrossfadeLightMat(texA, texB, sharedMixAlpha);
-      matsVisible[FACE_BOTTOM] = makeCrossfadeLightMat(texA, texB, sharedMixAlpha);
+      matsVisible[FACE_TOP]    = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
+      matsVisible[FACE_BOTTOM] = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
+
+    const faceMapA = [];
+    const faceMapB = [];
+    faceMapA[FACE_RIGHT] = texA; faceMapB[FACE_RIGHT] = texB;
+    faceMapA[FACE_LEFT]  = texA; faceMapB[FACE_LEFT]  = texB;
+    faceMapA[FACE_FRONT] = texA; faceMapB[FACE_FRONT] = texB;
+    faceMapA[FACE_BACK]  = texA; faceMapB[FACE_BACK]  = texB;
+    if (topBottomRotation != null) {
+      faceMapA[FACE_TOP]    = texA_tb; faceMapB[FACE_TOP]    = texB_tb;
+      faceMapA[FACE_BOTTOM] = texA_tb; faceMapB[FACE_BOTTOM] = texB_tb;
+    } else {
+      faceMapA[FACE_TOP]    = texA; faceMapB[FACE_TOP]    = texB;
+      faceMapA[FACE_BOTTOM] = texA; faceMapB[FACE_BOTTOM] = texB;
+    }
     }
 
     const invisible = new THREE.MeshStandardMaterial({
@@ -426,9 +444,11 @@ controls.enableDamping = true;
       ctxA, ctxB,
       texA, texB, texA_tb, texB_tb,
       matsVisible,
+      faceMapA, faceMapB,
       invisible,
       sharedMixAlpha,
       topBottomRotation,
+      rotMats: new Map(),
     };
 
     img.onload = () => {
@@ -453,12 +473,66 @@ controls.enableDamping = true;
     return source;
   }
 
-  function makeLightsLayer(sheetUrl, topBottomRotation, faceVisibleMask) {
+  
+  // Face-specific 7x7 numbering rotations (lights)
+  // SOUTH/ NORTH faces: number from (x,y) with top row = y=GRID_SIZE-1, left col = x=0
+  // TOP/ BOTTOM faces: number from (x,z) with top row = z=0 (04 side = north)
+  const __LIGHT_ROT90 = {
+    south: new Set([16, 20, 30, 34]),
+    north: new Set([16, 20, 30, 34]),
+    top:   new Set([11, 39]),
+    bottom:new Set([11, 39]),
+  };
+
+  function __numXY(x, y) {
+    const row = (GRID_SIZE - 1) - y; // y=6 => row0
+    const col = x; // x=0 => col0
+    return row * GRID_SIZE + col + 1;
+  }
+
+  function __numXZ(x, z) {
+    const row = z; // z=0 (north) => row0
+    const col = x;
+    return row * GRID_SIZE + col + 1;
+  }
+
+  function __needsLightRot90(faceIndex, x, y, z) {
+    if (z === GRID_SIZE - 1 && faceIndex === FACE_FRONT) { // south
+      return __LIGHT_ROT90.south.has(__numXY(x, y));
+    }
+    if (z === 0 && faceIndex === FACE_BACK) { // north
+      return __LIGHT_ROT90.north.has(__numXY(x, y));
+    }
+    if (y === GRID_SIZE - 1 && faceIndex === FACE_TOP) { // top
+      return __LIGHT_ROT90.top.has(__numXZ(x, z));
+    }
+    if (y === 0 && faceIndex === FACE_BOTTOM) { // bottom
+      return __LIGHT_ROT90.bottom.has(__numXZ(x, z));
+    }
+    return false;
+  }
+
+  function makeLightsLayer(sheetUrl, topBottomRotation, faceVisibleMask, x, y, z) {
     const source = __getLightSource(sheetUrl, topBottomRotation);
 
     const mats = Array(6);
     for (let fi = 0; fi < 6; fi++) {
-      mats[fi] = (faceVisibleMask && faceVisibleMask[fi]) ? source.matsVisible[fi] : source.invisible;
+      if (!(faceVisibleMask && faceVisibleMask[fi])) {
+        mats[fi] = source.invisible;
+        continue;
+      }
+
+      if (__needsLightRot90(fi, x, y, z)) {
+        const k = `fi:${fi}:rot90`;
+        if (!source.rotMats.has(k)) {
+          const mapA = source.faceMapA[fi];
+          const mapB = source.faceMapB[fi];
+          source.rotMats.set(k, makeCrossfadeLightMat(mapA, mapB, source.sharedMixAlpha, Math.PI / 2));
+        }
+        mats[fi] = source.rotMats.get(k);
+      } else {
+        mats[fi] = source.matsVisible[fi];
+      }
     }
 
     const mesh = new THREE.Mesh(baseGeo, mats);
@@ -466,6 +540,7 @@ controls.enableDamping = true;
 
     return { source, mesh };
   }
+
 
   // -------------------------------
   // Build instances
@@ -494,7 +569,7 @@ const isColumn = type.startsWith("column");
 
     // lights
     const sheetUrl = isColumn ? LIGHT_SHEET_COLUMN_URL : LIGHT_SHEET_BLOCK_URL;
-    const lights = makeLightsLayer(sheetUrl, topBottomRotation, faceMask);
+    const lights = makeLightsLayer(sheetUrl, topBottomRotation, faceMask, x, y, z);
 // inside overlay (only for inside)
     let insideMesh = null;
     if (type === "inside") {
