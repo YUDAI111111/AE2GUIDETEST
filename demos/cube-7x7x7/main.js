@@ -297,7 +297,6 @@ function makeMCBoxGeometry(size=1.0){
 // -----------------------------
 function makeMixMaterial(texA, texB, mixUniform){
   // Additive overlay for lights: must never hide the base texture.
-  // Use MeshBasicMaterial + AdditiveBlending so black pixels do not occlude.
   const mat = new THREE.MeshBasicMaterial({
     map: texA,
     transparent: true,
@@ -306,7 +305,6 @@ function makeMixMaterial(texA, texB, mixUniform){
     side: THREE.DoubleSide,
     blending: THREE.AdditiveBlending,
   });
-  // Prevent tone mapping from dimming the emissive overlay (Three r15x+)
   mat.toneMapped = false;
 
   mat.onBeforeCompile = (shader)=>{
@@ -317,7 +315,8 @@ function makeMixMaterial(texA, texB, mixUniform){
       "#include <common>",
       "#include <common>\nuniform sampler2D mapB;\nuniform float mixAlpha;\n"
     );
-shader.fragmentShader = shader.fragmentShader.replace(
+
+    shader.fragmentShader = shader.fragmentShader.replace(
       "#include <map_fragment>",
       `
 #ifdef USE_MAP
@@ -325,7 +324,6 @@ shader.fragmentShader = shader.fragmentShader.replace(
   vec4 texelColorB = texture2D( mapB, vMapUv );
   vec4 texelColor = mix(texelColorA, texelColorB, mixAlpha);
   texelColor = mapTexelToLinear( texelColor );
-  // For additive lights, treat alpha as brightness; black becomes effectively transparent.
   float a = max(max(texelColor.r, texelColor.g), texelColor.b);
   diffuseColor.rgb *= texelColor.rgb;
   diffuseColor.a *= a;
@@ -333,7 +331,6 @@ shader.fragmentShader = shader.fragmentShader.replace(
       `
     );
   };
-
   return mat;
 }
 
@@ -474,9 +471,9 @@ function stepLightSource(src, dt, speed=1.0){
   camera.position.set(11, 11, 13);
 
   const renderer = new THREE.WebGLRenderer({ antialias:true });
-  // Color management: make texture display predictable across Three.js versions
-  if ('outputColorSpace' in renderer) renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.NoToneMapping;
+  renderer.toneMappingExposure = 1.0;
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   // Ensure correct color management for textured materials
@@ -492,8 +489,6 @@ function stepLightSource(src, dt, speed=1.0){
 
   const hemi = new THREE.HemisphereLight(0xffffff, 0x101010, 0.8);
   scene.add(hemi);
-  const amb = new THREE.AmbientLight(0xffffff, 1.2);
-  scene.add(amb);
   const dir = new THREE.DirectionalLight(0xffffff, 1.1);
   dir.position.set(7, 10, 6);
   scene.add(dir);
@@ -522,7 +517,7 @@ function stepLightSource(src, dt, speed=1.0){
     { value:"ae2", label:"AE2 textures" },
     { value:"uv", label:"UV test" },
     { value:"faces", label:"Face colors" },
-  ], (v)=>{ MATERIAL_MODE=v; rebuildWorld(); });
+  ], (v)=>{ MATERIAL_MODE=v; console.log("[UI] Material=", v); rebuildWorld(); });
 
   // Raycast pick
   const raycaster = new THREE.Raycaster();
@@ -656,12 +651,12 @@ function stepLightSource(src, dt, speed=1.0){
   function baseMaterialFromTexture(tex){
     if (!tex) {
       // fallback to obvious error material
-      return new THREE.MeshStandardMaterial({ color: 0xff00ff, roughness:0.8, metalness:0.0, wireframe:WIREFRAME });
+      return new THREE.MeshBasicMaterial({ color: 0xff00ff, wireframe:WIREFRAME, side: THREE.DoubleSide });
     }
-    return new THREE.MeshStandardMaterial({ map: tex, roughness:0.9, metalness:0.0, wireframe:WIREFRAME });
+    return new THREE.MeshBasicMaterial({ map: tex, wireframe:WIREFRAME, side: THREE.DoubleSide });
   }
 
-  const invisibleMat = new THREE.MeshStandardMaterial({ transparent:true, opacity:0.0, depthWrite:false });
+  const invisibleMat = new THREE.MeshBasicMaterial({ transparent:true, opacity:0.0, depthWrite:false, side: THREE.DoubleSide });
 
   // Labels
   function makeLabel(text){
@@ -700,15 +695,11 @@ function stepLightSource(src, dt, speed=1.0){
 
   // World rebuild
   function clearGroup(g){
+    // IMPORTANT: do not dispose shared geometry/material on UI toggles.
+    // Disposing the shared Box/MC geometry causes meshes to become invisible after the first rebuild.
     while (g.children.length){
       const c = g.children.pop();
-      c.traverse((o)=>{
-        if (o.geometry) o.geometry.dispose?.();
-        if (o.material){
-          if (Array.isArray(o.material)) o.material.forEach(m=>m.dispose?.());
-          else o.material.dispose?.();
-        }
-      });
+      if (c.parent) c.parent.remove(c);
     }
   }
 
@@ -727,7 +718,7 @@ function stepLightSource(src, dt, speed=1.0){
   }
 
   function makeFaceColorMats(){
-    const mk = (c)=> new THREE.MeshStandardMaterial({ color:c, roughness:0.85, metalness:0.0, wireframe:WIREFRAME });
+    const mk = (c)=> new THREE.MeshBasicMaterial({ color:c, wireframe:WIREFRAME, side: THREE.DoubleSide });
     const m = new Array(6);
     m[FACE_RIGHT] = mk(0xff5555);
     m[FACE_LEFT]  = mk(0x55ff55);
@@ -798,6 +789,7 @@ function stepLightSource(src, dt, speed=1.0){
   }
 
   function rebuildWorld(){
+    const __t0 = safeNowMs();
     clearGroup(worldGroup);
 
     const faceMatsCache = null; // not used; per block computed
@@ -819,8 +811,7 @@ function stepLightSource(src, dt, speed=1.0){
 
           if (LIGHTS_ENABLED && lightMats){
             // Slightly larger to prevent z-fighting
-            const lightGeom = geom.clone();
-            const lightMesh = new THREE.Mesh(lightGeom, lightMats);
+            const lightMesh = new THREE.Mesh(geom, lightMats);
             lightMesh.scale.set(1.002, 1.002, 1.002);
             g.add(lightMesh);
           }
@@ -843,6 +834,22 @@ function stepLightSource(src, dt, speed=1.0){
   }
 
   rebuildWorld();
+  // show block count immediately
+  try { dbg.pickText.textContent = `Pick: none (blocks=${worldGroup.children.length})`; } catch(e) {}
+  // ---- DevTools exposure (module scope -> window) ----
+  // This is required because ES modules do not create global variables; without this, `scene` / `rebuildWorld`
+  // are `undefined` in the console. Expose minimal handles for fact-based debugging.
+  window.__cube7x7x7 = {
+    scene, camera, renderer, controls,
+    worldGroup,
+    get settings(){ return { LIGHTS_ENABLED, ANIM_ENABLED, WIREFRAME, LABELS_ENABLED, MATERIAL_MODE }; },
+    rebuildWorld,
+  };
+  // Convenience aliases
+  window.scene = scene;
+  window.rebuildWorld = rebuildWorld;
+  window.worldGroup = worldGroup;
+
 
   // Resize
   window.addEventListener("resize", ()=>{
