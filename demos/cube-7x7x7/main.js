@@ -45,6 +45,64 @@ try {
   document.body.style.margin = "0";
   document.body.style.overflow = "hidden";
   document.body.appendChild(renderer.domElement);
+  // Picking for debug
+  const __ray = new THREE.Raycaster();
+  const __mouse = new THREE.Vector2();
+  let __pickHelper = null;
+
+  function __pickFromEvent(ev) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    __mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+    __mouse.y = -(((ev.clientY - rect.top) / rect.height) * 2 - 1);
+    __ray.setFromCamera(__mouse, camera);
+
+    // collect base meshes only
+    const targets = [];
+    for (const inst of (typeof instances !== "undefined" ? instances : [])) {
+      if (inst?.baseMesh) targets.push(inst.baseMesh);
+    }
+    const hits = __ray.intersectObjects(targets, false);
+    if (!hits.length) {
+      window.__lastPick = null;
+      __setPickText("Pick: none");
+      if (__pickHelper) { scene.remove(__pickHelper); __pickHelper = null; }
+      return;
+    }
+    const hit = hits[0];
+    const inst = (typeof instances !== "undefined") ? instances.find(i => i.baseMesh === hit.object) : null;
+    if (!inst) return;
+
+    // build diagnostic
+    const faceMask = [
+      !hasBlock(inst.x + 1, inst.y, inst.z),
+      !hasBlock(inst.x - 1, inst.y, inst.z),
+      !hasBlock(inst.x, inst.y + 1, inst.z),
+      !hasBlock(inst.x, inst.y - 1, inst.z),
+      !hasBlock(inst.x, inst.y, inst.z + 1),
+      !hasBlock(inst.x, inst.y, inst.z - 1),
+    ];
+    const diag = {
+      x: inst.x, y: inst.y, z: inst.z,
+      type: inst.type,
+      rotX: inst.group.rotation.x,
+      rotY: inst.group.rotation.y,
+      rotZ: inst.group.rotation.z,
+      faceMask,
+      pureAE2: DEBUG_PURE_AE2,
+      matMode: DEBUG_MAT_MODE,
+    };
+    window.__lastPick = diag;
+    __setPickText(`Pick: (${diag.x},${diag.y},${diag.z})  ${diag.type}  rot(x,y)=(${diag.rotX.toFixed(2)},${diag.rotY.toFixed(2)})`);
+
+    // helper
+    if (__pickHelper) scene.remove(__pickHelper);
+    __pickHelper = new THREE.BoxHelper(inst.group, 0xffffff);
+    scene.add(__pickHelper);
+    __requestRender();
+  }
+
+  renderer.domElement.addEventListener("click", (ev) => __pickFromEvent(ev));
+
 
   const controls = new OrbitControls(camera, renderer.domElement);
   
@@ -162,13 +220,173 @@ controls.enableDamping = true;
   placeLayerFromRule(0, (idx) => !layer1Blanks.has(idx));
 
   const hasBlock = (x, y, z) => placed.has(key(x, y, z));
+
+  // -------------------------------
+  // Debug Panel (always on for development)
+  // -------------------------------
+  let DEBUG_PURE_AE2 = true;          // Disable non-AE2 pull-axis/top-bottom UV hacks
+  let DEBUG_MAT_MODE = "ae2";         // "ae2" | "uv" | "faces"
+  let DEBUG_SHOW_LABELS = false;      // Coordinate/type labels (heavy)
+  let DEBUG_SHOW_WIREFRAME = false;   // Wireframe overlay
+  const __texStatus = new Map();      // name -> {url,state}
+
+  let __debugEl = null;
+  function __ensureDebugPanel() {
+    if (__debugEl) return __debugEl;
+    const el = document.createElement("div");
+    el.style.cssText = [
+      "position:fixed",
+      "right:12px",
+      "top:12px",
+      "z-index:9999",
+      "background:rgba(0,0,0,0.72)",
+      "color:#fff",
+      "font:12px/1.35 ui-monospace,Consolas,monospace",
+      "padding:10px 12px",
+      "border-radius:10px",
+      "max-width:360px",
+      "max-height:70vh",
+      "overflow:auto",
+      "box-shadow:0 8px 24px rgba(0,0,0,0.35)"
+    ].join(";");
+    el.innerHTML = `
+      <div style="font-weight:700;margin-bottom:6px;">cube-7x7x7 DEBUG</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
+        <label style="white-space:nowrap;"><input id="dbg_pure" type="checkbox" checked> Pure AE2</label>
+        <label style="white-space:nowrap;"><input id="dbg_lights" type="checkbox" checked> Lights</label>
+        <label style="white-space:nowrap;"><input id="dbg_anim" type="checkbox" checked> Anim</label>
+        <label style="white-space:nowrap;"><input id="dbg_wire" type="checkbox"> Wire</label>
+        <label style="white-space:nowrap;"><input id="dbg_labels" type="checkbox"> Labels</label>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:8px;">
+        <div style="white-space:nowrap;">Material</div>
+        <select id="dbg_mat" style="flex:1;min-width:160px;">
+          <option value="ae2">AE2 textures</option>
+          <option value="uv">UV test</option>
+          <option value="faces">Face colors</option>
+        </select>
+        <button id="dbg_dump" style="padding:3px 8px;">Dump pick</button>
+      </div>
+      <div id="dbg_pick" style="margin:6px 0 10px 0;color:#bff;">Pick: none</div>
+      <div style="font-weight:700;margin:6px 0;">Textures</div>
+      <div id="dbg_tex"></div>
+      <div style="margin-top:10px;color:#ddd;">
+        Click a block to inspect its (x,y,z), type, rotations, faceMask. If textures show error, check URL paths.
+      </div>
+    `;
+    document.body.appendChild(el);
+    __debugEl = el;
+
+    const $ = (id) => el.querySelector(id);
+
+    $("#dbg_pure").addEventListener("change", (e) => {
+      DEBUG_PURE_AE2 = !!e.target.checked;
+      __rebuildWorld();
+    });
+    $("#dbg_lights").addEventListener("change", (e) => {
+      if (typeof LIGHTS_ENABLED !== "undefined") LIGHTS_ENABLED = !!e.target.checked;
+      __applyVisibility();
+      __requestRender();
+    });
+    $("#dbg_anim").addEventListener("change", (e) => {
+      if (typeof ANIM_ENABLED !== "undefined") ANIM_ENABLED = !!e.target.checked;
+      __requestRender();
+    });
+    $("#dbg_wire").addEventListener("change", (e) => {
+      DEBUG_SHOW_WIREFRAME = !!e.target.checked;
+      __applyMaterialMode();
+      __requestRender();
+    });
+    $("#dbg_labels").addEventListener("change", (e) => {
+      DEBUG_SHOW_LABELS = !!e.target.checked;
+      __applyLabels();
+      __requestRender();
+    });
+    $("#dbg_mat").addEventListener("change", (e) => {
+      DEBUG_MAT_MODE = e.target.value;
+      __applyMaterialMode();
+      __requestRender();
+    });
+    $("#dbg_dump").addEventListener("click", () => {
+      if (window.__lastPick) console.log("[Pick Dump]", window.__lastPick);
+    });
+
+    return el;
+  }
+
+  function __refreshDebugPanel() {
+    const el = __ensureDebugPanel();
+    const texEl = el.querySelector("#dbg_tex");
+    const rows = [];
+    for (const [name, s] of __texStatus.entries()) {
+      const c = s.state === "ok" ? "#9f9" : (s.state === "error" ? "#f99" : "#ff9");
+      rows.push(`<div style="display:flex;gap:8px;align-items:center;margin:2px 0;">
+        <span style="width:10px;height:10px;border-radius:3px;background:${c};display:inline-block;"></span>
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${s.url}">${name}</span>
+        <span style="opacity:0.85;">${s.state}</span>
+      </div>`);
+    }
+    texEl.innerHTML = rows.join("") || `<div style="opacity:0.8;">(no texture loads yet)</div>`;
+  }
+
+  function __setPickText(text) {
+    const el = __ensureDebugPanel();
+    const pick = el.querySelector("#dbg_pick");
+    pick.textContent = text;
+  }
+
+  // procedural UV test texture
+  function __makeUVTestTexture() {
+    const s = 256;
+    const c = document.createElement("canvas");
+    c.width = s; c.height = s;
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "#111"; ctx.fillRect(0,0,s,s);
+    // grid
+    ctx.strokeStyle = "rgba(255,255,255,0.25)";
+    for (let i=0;i<=8;i++){
+      const p = (s*i)/8;
+      ctx.beginPath(); ctx.moveTo(p,0); ctx.lineTo(p,s); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0,p); ctx.lineTo(s,p); ctx.stroke();
+    }
+    // arrow U direction →
+    ctx.strokeStyle = "rgba(0,255,255,0.9)";
+    ctx.lineWidth = 6;
+    ctx.beginPath(); ctx.moveTo(40, s-40); ctx.lineTo(s-60, s-40); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(s-60, s-40); ctx.lineTo(s-85, s-55); ctx.lineTo(s-85, s-25); ctx.closePath(); ctx.fillStyle="rgba(0,255,255,0.9)"; ctx.fill();
+    // arrow V direction ↑
+    ctx.strokeStyle = "rgba(255,0,255,0.9)";
+    ctx.beginPath(); ctx.moveTo(40, s-40); ctx.lineTo(40, 60); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(40,60); ctx.lineTo(25,85); ctx.lineTo(55,85); ctx.closePath(); ctx.fillStyle="rgba(255,0,255,0.9)"; ctx.fill();
+    // labels
+    ctx.fillStyle="#fff"; ctx.font="bold 28px ui-monospace,Consolas,monospace";
+    ctx.fillText("U→", 60, s-50);
+    ctx.fillText("V↑", 10, 80);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 8;
+    tex.wrapS = THREE.ClampToEdgeWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.magFilter = THREE.NearestFilter;
+    tex.minFilter = THREE.NearestMipmapNearestFilter;
+    return tex;
+  }
+
 // -------------------------------
   // Textures
   // -------------------------------
   const loader = new THREE.TextureLoader();
 
-  function loadTex(url) {
-    const t = loader.load(url);
+  function loadTex(url, label) {
+    const name = label || url;
+    __texStatus.set(name, { url, state: "loading" });
+    __refreshDebugPanel();
+    const t = loader.load(
+      url,
+      () => { __texStatus.set(name, { url, state: "ok" }); __refreshDebugPanel(); __requestRender(); },
+      undefined,
+      (err) => { console.error("Texture load failed:", url, err); __texStatus.set(name, { url, state: "error" }); __refreshDebugPanel(); }
+    );
     t.colorSpace = THREE.SRGBColorSpace;
     t.anisotropy = 8;
     t.wrapS = THREE.ClampToEdgeWrapping;
@@ -190,202 +408,14 @@ controls.enableDamping = true;
   const texInsideA = loadTex("../hollow-3x3x3/assets/controller_inside_a_powered.png");
   const texInsideB = loadTex("../hollow-3x3x3/assets/controller_inside_b_powered.png");
 
-  
   // -------------------------------
-  // Geometry (Minecraft-like UV orientation)
-  // Keep material index order: [right, left, top, bottom, front(+Z), back(-Z)]
+  // Geometry / Face indices (BoxGeometry order)
+  // [right, left, top, bottom, front, back]
   // -------------------------------
-  function makeMCBoxGeometry(size) {
-    const h = size * 0.5;
-    // 24 verts (4 per face), 36 indices (6 per face)
-    const positions = [];
-    const normals = [];
-    const uvs = [];
-    const indices = [];
-
-    // helper to push a face (4 verts) with given normal and vertex positions in order:
-    // v0 top-left, v1 bottom-left, v2 top-right, v3 bottom-right (as seen from outside)
-    function addFace(nx, ny, nz, v0, v1, v2, v3, uv0, uv1, uv2, uv3) {
-      const base = positions.length / 3;
-      positions.push(...v0, ...v1, ...v2, ...v3);
-      for (let i = 0; i < 4; i++) normals.push(nx, ny, nz);
-      uvs.push(...uv0, ...uv1, ...uv2, ...uv3);
-      // two triangles: (0,1,2) (2,1,3)
-      indices.push(base + 0, base + 1, base + 2, base + 2, base + 1, base + 3);
-    }
-
-    // Standard UVs: u left->right, v bottom->top (0..1)
-    const UV_TL = [0, 1], UV_BL = [0, 0], UV_TR = [1, 1], UV_BR = [1, 0];
-
-    // Right face (+X): u along -Z (north->south to the left->right when seen from +X)
-    // To minimize 90deg swaps, we keep v along +Y and u along -Z.
-    addFace(
-      +1, 0, 0,
-      [ +h, +h, +h ], // top-left  (south)
-      [ +h, -h, +h ], // bottom-left
-      [ +h, +h, -h ], // top-right (north)
-      [ +h, -h, -h ], // bottom-right
-      UV_TL, UV_BL, UV_TR, UV_BR
-    );
-
-    // Left face (-X): u along +Z
-    addFace(
-      -1, 0, 0,
-      [ -h, +h, -h ], // top-left (north)
-      [ -h, -h, -h ],
-      [ -h, +h, +h ], // top-right (south)
-      [ -h, -h, +h ],
-      UV_TL, UV_BL, UV_TR, UV_BR
-    );
-
-    // Top face (+Y): u along +X (west->east), v along -Z (south->north so that north is "top")
-    addFace(
-      0, +1, 0,
-      [ -h, +h, -h ], // top-left (north-west)
-      [ -h, +h, +h ], // bottom-left (south-west)
-      [ +h, +h, -h ], // top-right (north-east)
-      [ +h, +h, +h ], // bottom-right (south-east)
-      UV_TL, UV_BL, UV_TR, UV_BR
-    );
-
-    // Bottom face (-Y): keep same world-orientation when viewed from above (north at top).
-    // Winding must face outward (-Y), so we order vertices as seen from below,
-    // but UV mapping is kept consistent with top (north at top when referenced in world).
-    addFace(
-      0, -1, 0,
-      [ -h, -h, +h ], // top-left (south-west) as seen from below
-      [ -h, -h, -h ], // bottom-left (north-west)
-      [ +h, -h, +h ], // top-right (south-east)
-      [ +h, -h, -h ], // bottom-right (north-east)
-      UV_TL, UV_BL, UV_TR, UV_BR
-    );
-
-    // Front face (+Z) == world SOUTH: u along +X, v along +Y
-    addFace(
-      0, 0, +1,
-      [ -h, +h, +h ], // top-left (west)
-      [ -h, -h, +h ],
-      [ +h, +h, +h ], // top-right (east)
-      [ +h, -h, +h ],
-      UV_TL, UV_BL, UV_TR, UV_BR
-    );
-
-    // Back face (-Z) == world NORTH: u along +X, v along +Y
-    addFace(
-      0, 0, -1,
-      [ -h, +h, -h ], // top-left (west)
-      [ -h, -h, -h ],
-      [ +h, +h, -h ], // top-right (east)
-      [ +h, -h, -h ],
-      UV_TL, UV_BL, UV_TR, UV_BR
-    );
-
-    const g = new THREE.BufferGeometry();
-    g.setIndex(indices);
-    g.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-    g.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
-    g.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
-
-    // Ensure multi-material groups: 6 indices per face group
-    g.clearGroups();
-    for (let i = 0; i < 6; i++) g.addGroup(i * 6, 6, i);
-
-    g.computeBoundingSphere();
-    return g;
-  }
-
-  // -------------------------------
-  // Face indices
-  // [right, left, top, bottom, front(+Z), back(-Z)]
-  // -------------------------------
-  const baseGeo = makeMCBoxGeometry(1.0);
-  const insideGeo = makeMCBoxGeometry(0.92);
+  const baseGeo = new THREE.BoxGeometry(1, 1, 1);
+  const insideGeo = new THREE.BoxGeometry(0.92, 0.92, 0.92);
 
   const FACE_RIGHT = 0, FACE_LEFT = 1, FACE_TOP = 2, FACE_BOTTOM = 3, FACE_FRONT = 4, FACE_BACK = 5;
-
-  // -------------------------------
-  // World/local face mapping
-  // - We rotate the whole block (group.rotation) to express column direction.
-  // - Therefore, visibility and per-world-face corrections must be mapped onto local face indices.
-  // Face index order follows BoxGeometry: RIGHT, LEFT, TOP, BOTTOM, FRONT(south +Z), BACK(north -Z)
-  const WORLD_RIGHT = FACE_RIGHT;
-  const WORLD_LEFT = FACE_LEFT;
-  const WORLD_TOP = FACE_TOP;
-  const WORLD_BOTTOM = FACE_BOTTOM;
-  const WORLD_SOUTH = FACE_FRONT;
-  const WORLD_NORTH = FACE_BACK;
-
-  const __LOCAL_FACE_NORMALS = [
-    new THREE.Vector3( 1, 0, 0), // RIGHT
-    new THREE.Vector3(-1, 0, 0), // LEFT
-    new THREE.Vector3( 0, 1, 0), // TOP
-    new THREE.Vector3( 0,-1, 0), // BOTTOM
-    new THREE.Vector3( 0, 0, 1), // FRONT (south)
-    new THREE.Vector3( 0, 0,-1), // BACK  (north)
-  ];
-
-  function __worldFaceFromNormal(n) {
-    const ax = Math.abs(n.x), ay = Math.abs(n.y), az = Math.abs(n.z);
-    if (ax >= ay && ax >= az) return n.x >= 0 ? WORLD_RIGHT : WORLD_LEFT;
-    if (ay >= ax && ay >= az) return n.y >= 0 ? WORLD_TOP : WORLD_BOTTOM;
-    return n.z >= 0 ? WORLD_SOUTH : WORLD_NORTH;
-  }
-
-  // Precompute localFace -> worldFace for each block type (based on group.rotation).
-  const __FACE_LOCAL_TO_WORLD = (() => {
-    const mapForAngles = (rx, ry) => {
-      const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, 0, "XYZ"));
-      return __LOCAL_FACE_NORMALS.map((v) => __worldFaceFromNormal(v.clone().applyQuaternion(q)));
-    };
-    return {
-      block:    mapForAngles(0, 0),
-      inside:   mapForAngles(0, 0),
-      column_y: mapForAngles(0, 0),
-      column_z: mapForAngles(Math.PI / 2, 0),
-      column_x: mapForAngles(Math.PI / 2, Math.PI / 2),
-    };
-  })();
-
-  function __worldVisibleMask(x, y, z) {
-    // per WORLD_* (same numeric indices as FACE_*)
-    const m = [];
-    m[WORLD_RIGHT]  = !hasBlock(x + 1, y, z);
-    m[WORLD_LEFT]   = !hasBlock(x - 1, y, z);
-    m[WORLD_TOP]    = !hasBlock(x, y + 1, z);
-    m[WORLD_BOTTOM] = !hasBlock(x, y - 1, z);
-    m[WORLD_SOUTH]  = !hasBlock(x, y, z + 1);
-    m[WORLD_NORTH]  = !hasBlock(x, y, z - 1);
-    return m;
-  }
-
-  
-  // -------------------------------
-  // Light/Base +90° rotation targets (face-number based)
-  // (south/north: 16/20/30/34, top/bottom: 11/39)
-  // -------------------------------
-  const __LIGHT_ROT90 = {
-    south: new Set([16, 20, 30, 34]),
-    north: new Set([16, 20, 30, 34]),
-    top: new Set([11, 39]),
-    bottom: new Set([11, 39]),
-  };
-
-function __needsRot90World(worldFace, x, y, z) {
-    if (z === GRID_SIZE - 1 && worldFace === WORLD_SOUTH) {
-      return __LIGHT_ROT90.south.has(__numXY(x, y));
-    }
-    if (z === 0 && worldFace === WORLD_NORTH) {
-      return __LIGHT_ROT90.north.has(__numXY(x, y));
-    }
-    if (y === GRID_SIZE - 1 && worldFace === WORLD_TOP) {
-      return __LIGHT_ROT90.top.has(__numXZ(x, z));
-    }
-    if (y === 0 && worldFace === WORLD_BOTTOM) {
-      return __LIGHT_ROT90.bottom.has(__numXZ(x, z));
-    }
-    return false;
-  }
-
 
   // -------------------------------
   // AE2-like connectivity rules
@@ -408,15 +438,39 @@ function __needsRot90World(worldFace, x, y, z) {
   }
 
   // 任意の連続3ブロックがあれば、その軸方向に「引っ張られる」扱い（端も含む）
-  // [REMOVED] pullAxisFor: column orientation is expressed by mesh rotation only.
+  function pullAxisFor(x, y, z) {
+    const x3 =
+      (hasBlock(x - 2, y, z) && hasBlock(x - 1, y, z)) ||
+      (hasBlock(x - 1, y, z) && hasBlock(x + 1, y, z)) ||
+      (hasBlock(x + 1, y, z) && hasBlock(x + 2, y, z));
 
+    const y3 =
+      (hasBlock(x, y - 2, z) && hasBlock(x, y - 1, z)) ||
+      (hasBlock(x, y - 1, z) && hasBlock(x, y + 1, z)) ||
+      (hasBlock(x, y + 1, z) && hasBlock(x, y + 2, z));
+
+    const z3 =
+      (hasBlock(x, y, z - 2) && hasBlock(x, y, z - 1)) ||
+      (hasBlock(x, y, z - 1) && hasBlock(x, y, z + 1)) ||
+      (hasBlock(x, y, z + 1) && hasBlock(x, y, z + 2));
+
+    const count = (x3 ? 1 : 0) + (y3 ? 1 : 0) + (z3 ? 1 : 0);
+    if (count >= 2) return null; // inside/ambiguous
+    if (x3) return "x";
+    if (y3) return "y";
+    if (z3) return "z";
+    return null;
+  }
 
   // 上下面（立方体の上の面・下の面）の向きを “列方向” に合わせるための回転
   // X方向に引っ張る: 90deg
   // Z方向に引っ張る: 0deg
   // Y方向: ここでは回転不要（column_y時はモデル回転で表現）
-  // [REMOVED] topBottomRotationFor: column orientation is expressed by mesh rotation only.
-
+  function topBottomRotationFor(pullAxis) {
+    if (pullAxis === "x") return Math.PI / 2;
+    if (pullAxis === "z") return 0;
+    return null;
+  }
 
   // -------------------------------
   // Materials
@@ -424,7 +478,7 @@ function __needsRot90World(worldFace, x, y, z) {
   const BASE_EMISSIVE = 0.45;
   const INSIDE_EMISSIVE = 0.75;
 
-  function makeBaseMaterials(baseTexture) {
+  function makeBaseMaterials(baseTexture, topBottomRotation) {
     const makeMat = (t) =>
       new THREE.MeshStandardMaterial({
         map: t,
@@ -433,43 +487,23 @@ function __needsRot90World(worldFace, x, y, z) {
         emissiveIntensity: BASE_EMISSIVE,
       });
 
-    // 6 faces share the same base texture; any required +90° correction is applied later per-face.
-    return Array(6).fill(null).map(() => makeMat(baseTexture));
-  }
-  // Invisible material for culled faces (base layer)
-  const invisibleMat = new THREE.MeshStandardMaterial({ transparent: true, opacity: 0.0, depthWrite: false });
+    const mats = Array(6).fill(null).map(() => makeMat(baseTexture));
 
+    if (topBottomRotation != null) {
+      const topTex = baseTexture.clone();
+      const botTex = baseTexture.clone();
+      topTex.center.set(0.5, 0.5);
+      botTex.center.set(0.5, 0.5);
+      topTex.rotation = topBottomRotation;
+      botTex.rotation = topBottomRotation;
+      topTex.needsUpdate = true;
+      botTex.needsUpdate = true;
 
-  function __rotateMatTexture(mat, delta) {
-    if (!mat) return;
-    const tex = mat.map || mat.emissiveMap || null;
-    if (!tex) return;
-
-    // Canvas textures (lights) are rotated via shader uniform; base textures use texture clone.
-    const isCanvasTex =
-      !!tex.isCanvasTexture ||
-      (tex.image &&
-        (tex.image instanceof HTMLCanvasElement || tex.image?.tagName === "CANVAS"));
-
-    if (isCanvasTex) {
-      // For safety; base path should not reach here.
-      tex.center?.set(0.5, 0.5);
-      tex.rotation = (tex.rotation || 0) + delta;
-      tex.needsUpdate = true;
-      mat.needsUpdate = true;
-      return;
+      mats[FACE_TOP] = makeMat(topTex);
+      mats[FACE_BOTTOM] = makeMat(botTex);
     }
-
-    const t = tex.clone();
-    t.center.set(0.5, 0.5);
-    t.rotation = (tex.rotation || 0) + delta;
-    t.needsUpdate = true;
-
-    if (mat.map) mat.map = t;
-    if ("emissiveMap" in mat && mat.emissiveMap) mat.emissiveMap = t;
-    mat.needsUpdate = true;
+    return mats;
   }
-
 
   // -------------------------------
   // Lights (sprite-sheet -> canvas textures -> crossfade)
@@ -563,8 +597,8 @@ function __needsRot90World(worldFace, x, y, z) {
 
   const __LIGHT_SOURCE_CACHE = new Map();
 
-  function __getLightSource(sheetUrl) {
-    const key = sheetUrl;
+  function __getLightSource(sheetUrl, topBottomRotation) {
+    const key = `${sheetUrl}|${topBottomRotation == null ? "n" : String(topBottomRotation)}`;
     if (__LIGHT_SOURCE_CACHE.has(key)) return __LIGHT_SOURCE_CACHE.get(key);
 
     const canvasA = document.createElement("canvas");
@@ -577,25 +611,38 @@ function __needsRot90World(worldFace, x, y, z) {
 
     const texA = mkCanvasTex(canvasA, null);
     const texB = mkCanvasTex(canvasB, null);
+    const texA_tb = topBottomRotation != null ? mkCanvasTex(canvasA, topBottomRotation) : null;
+    const texB_tb = topBottomRotation != null ? mkCanvasTex(canvasB, topBottomRotation) : null;
 
     const sharedMixAlpha = { value: 0.0 };
 
     const matsVisible = [];
-    matsVisible[FACE_RIGHT]  = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
-    matsVisible[FACE_LEFT]   = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
-    matsVisible[FACE_TOP]    = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
-    matsVisible[FACE_BOTTOM] = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
-    matsVisible[FACE_FRONT]  = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
-    matsVisible[FACE_BACK]   = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
+    matsVisible[FACE_RIGHT] = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
+    matsVisible[FACE_LEFT]  = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
+    matsVisible[FACE_FRONT] = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
+    matsVisible[FACE_BACK]  = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
+
+    if (topBottomRotation != null) {
+      matsVisible[FACE_TOP]    = makeCrossfadeLightMat(texA_tb, texB_tb, sharedMixAlpha, 0.0);
+      matsVisible[FACE_BOTTOM] = makeCrossfadeLightMat(texA_tb, texB_tb, sharedMixAlpha, 0.0);
+    } else {
+      matsVisible[FACE_TOP]    = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
+      matsVisible[FACE_BOTTOM] = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
 
     const faceMapA = [];
     const faceMapB = [];
-    faceMapA[FACE_RIGHT]  = texA; faceMapB[FACE_RIGHT]  = texB;
-    faceMapA[FACE_LEFT]   = texA; faceMapB[FACE_LEFT]   = texB;
-    faceMapA[FACE_TOP]    = texA; faceMapB[FACE_TOP]    = texB;
-    faceMapA[FACE_BOTTOM] = texA; faceMapB[FACE_BOTTOM] = texB;
-    faceMapA[FACE_FRONT]  = texA; faceMapB[FACE_FRONT]  = texB;
-    faceMapA[FACE_BACK]   = texA; faceMapB[FACE_BACK]   = texB;
+    faceMapA[FACE_RIGHT] = texA; faceMapB[FACE_RIGHT] = texB;
+    faceMapA[FACE_LEFT]  = texA; faceMapB[FACE_LEFT]  = texB;
+    faceMapA[FACE_FRONT] = texA; faceMapB[FACE_FRONT] = texB;
+    faceMapA[FACE_BACK]  = texA; faceMapB[FACE_BACK]  = texB;
+    if (topBottomRotation != null) {
+      faceMapA[FACE_TOP]    = texA_tb; faceMapB[FACE_TOP]    = texB_tb;
+      faceMapA[FACE_BOTTOM] = texA_tb; faceMapB[FACE_BOTTOM] = texB_tb;
+    } else {
+      faceMapA[FACE_TOP]    = texA; faceMapB[FACE_TOP]    = texB;
+      faceMapA[FACE_BOTTOM] = texA; faceMapB[FACE_BOTTOM] = texB;
+    }
+    }
 
     const invisible = new THREE.MeshStandardMaterial({
       transparent: true,
@@ -613,21 +660,24 @@ function __needsRot90World(worldFace, x, y, z) {
       frames: 1,
       ready: false,
       ctxA, ctxB,
-      texA, texB,
+      texA, texB, texA_tb, texB_tb,
       matsVisible,
       faceMapA, faceMapB,
       invisible,
       sharedMixAlpha,
-      rotMats: new Map(), // key: `${localFace}|${rotRadians}`
+      topBottomRotation,
+      rotMats: new Map(),
     };
 
     img.onload = () => {
       source.frames = Math.max(1, Math.floor(img.height / H));
       drawFrame(source.ctxA, img, 0);
       source.texA.needsUpdate = true;
+      if (source.texA_tb) source.texA_tb.needsUpdate = true;
 
       drawFrame(source.ctxB, img, 1 % source.frames);
       source.texB.needsUpdate = true;
+      if (source.texB_tb) source.texB_tb.needsUpdate = true;
 
       source.ready = true;
     };
@@ -641,7 +691,18 @@ function __needsRot90World(worldFace, x, y, z) {
     return source;
   }
 
-function __numXY(x, y) {
+  
+  // Face-specific 7x7 numbering rotations (lights)
+  // SOUTH/ NORTH faces: number from (x,y) with top row = y=GRID_SIZE-1, left col = x=0
+  // TOP/ BOTTOM faces: number from (x,z) with top row = z=0 (04 side = north)
+  const __LIGHT_ROT90 = {
+    south: new Set([16, 20, 30, 34]),
+    north: new Set([16, 20, 30, 34]),
+    top:   new Set([11, 39]),
+    bottom:new Set([11, 39]),
+  };
+
+  function __numXY(x, y) {
     const row = (GRID_SIZE - 1) - y; // y=6 => row0
     const col = x; // x=0 => col0
     return row * GRID_SIZE + col + 1;
@@ -669,28 +730,26 @@ function __numXY(x, y) {
     return false;
   }
 
-  function makeLightsLayer(sheetUrl, worldVisible, localToWorld, x, y, z) {
-    const source = __getLightSource(sheetUrl);
+  function makeLightsLayer(sheetUrl, topBottomRotation, faceVisibleMask, x, y, z) {
+    const source = __getLightSource(sheetUrl, topBottomRotation);
 
-    const mats = Array(6).fill(null);
-    for (let li = 0; li < 6; li++) {
-      const wf = localToWorld[li];
-
-      if (!worldVisible[wf]) {
-        mats[li] = source.invisible;
+    const mats = Array(6);
+    for (let fi = 0; fi < 6; fi++) {
+      if (!(faceVisibleMask && faceVisibleMask[fi])) {
+        mats[fi] = source.invisible;
         continue;
       }
 
-      if (__needsRot90World(wf, x, y, z)) {
-        const k = `${li}|${Math.PI / 2}`;
+      if (__needsLightRot90(fi, x, y, z)) {
+        const k = `fi:${fi}:rot90`;
         if (!source.rotMats.has(k)) {
-          const mapA = source.faceMapA[li];
-          const mapB = source.faceMapB[li];
+          const mapA = source.faceMapA[fi];
+          const mapB = source.faceMapB[fi];
           source.rotMats.set(k, makeCrossfadeLightMat(mapA, mapB, source.sharedMixAlpha, Math.PI / 2));
         }
-        mats[li] = source.rotMats.get(k);
+        mats[fi] = source.rotMats.get(k);
       } else {
-        mats[li] = source.matsVisible[li];
+        mats[fi] = source.matsVisible[fi];
       }
     }
 
@@ -705,45 +764,31 @@ function __numXY(x, y) {
   // Build instances
   // -------------------------------
   function makeInstance(x, y, z) {
-    const type0 = classifyType(x, y, z);
-    const type = type0 === "block" ? "block" : type0;
+    const type = classifyType(x, y, z);
 
-    // Determine group rotation (express column direction as mesh rotation).
-    let rx = 0, ry = 0;
-    if (type === "column_z") {
-      rx = Math.PI / 2;
-    } else if (type === "column_x") {
-      rx = Math.PI / 2;
-      ry = Math.PI / 2;
-    }
+    const pullAxis = DEBUG_PURE_AE2 ? null : pullAxisFor(x, y, z);
+    const topBottomRotation = DEBUG_PURE_AE2 ? null : topBottomRotationFor(pullAxis);
 
-    const localToWorld = __FACE_LOCAL_TO_WORLD[type] || __FACE_LOCAL_TO_WORLD.block;
-    const worldVisible = __worldVisibleMask(x, y, z);
+    
 
-    // base materials (per local face, driven by WORLD visibility/corrections)
-    const baseTex = (type === "column_x" || type === "column_y" || type === "column_z")
-      ? texColumnBase
-      : texBlockBase;
+    const faceMask = [
+      !hasBlock(x + 1, y, z), // RIGHT
+      !hasBlock(x - 1, y, z), // LEFT
+      !hasBlock(x, y + 1, z), // TOP
+      !hasBlock(x, y - 1, z), // BOTTOM
+      !hasBlock(x, y, z + 1), // FRONT (south)
+      !hasBlock(x, y, z - 1), // BACK (north)
+    ];
+const isColumn = type.startsWith("column");
+    const baseTex = isColumn ? texColumnBase : texBlockBase;
 
-    const baseMats = makeBaseMaterials(baseTex);
-    for (let li = 0; li < 6; li++) {
-      const wf = localToWorld[li];
-      if (!worldVisible[wf]) {
-        baseMats[li] = invisibleMat;
-        continue;
-      }
-      if (__needsRot90World(wf, x, y, z)) {
-        __rotateMatTexture(baseMats[li], Math.PI / 2);
-      }
-    }
+    const baseMats = makeBaseMaterials(baseTex, topBottomRotation);
     const baseMesh = new THREE.Mesh(baseGeo, baseMats);
 
     // lights
-    const isColumn = (type === "column_x" || type === "column_y" || type === "column_z");
     const sheetUrl = isColumn ? LIGHT_SHEET_COLUMN_URL : LIGHT_SHEET_BLOCK_URL;
-    const lights = makeLightsLayer(sheetUrl, worldVisible, localToWorld, x, y, z);
-
-    // inside overlay (only for inside)
+    const lights = makeLightsLayer(sheetUrl, topBottomRotation, faceMask, x, y, z);
+// inside overlay (only for inside)
     let insideMesh = null;
     if (type === "inside") {
       const parity = (Math.abs(x) + Math.abs(y) + Math.abs(z)) & 1;
@@ -761,10 +806,18 @@ function __numXY(x, y) {
     group.add(baseMesh, lights.mesh);
     if (insideMesh) group.add(insideMesh);
 
-    group.rotation.set(rx, ry, 0);
+    // AE2-like rotations for column variants (model orientation)
+    if (type === "column_z") {
+      group.rotation.x = Math.PI / 2;
+    } else if (type === "column_x") {
+      group.rotation.x = Math.PI / 2;
+      group.rotation.y = Math.PI / 2;
+    }
+    // column_y: no rotation
+
     group.position.set((x * SPACING) - OFFSET, (y * SPACING) - OFFSET, (z * SPACING) - OFFSET);
 
-    return { x, y, z, type, group, lights };
+    return { x, y, z, type, group, lights, baseMesh, insideMesh };
   }
 
   const instances = [];
@@ -785,6 +838,156 @@ function __numXY(x, y) {
   if (layerIndex >= 0) layerGroups[layerIndex].add(inst.group);
   else scene.add(inst.group);
 instances.push(inst);
+  // -------------------------------
+  // Debug helpers operating on built instances
+  // -------------------------------
+  const __uvTestTex = __makeUVTestTexture();
+  const __uvTestMat = new THREE.MeshStandardMaterial({
+    map: __uvTestTex,
+    emissiveMap: __uvTestTex,
+    emissive: new THREE.Color(0xffffff),
+    emissiveIntensity: 0.3,
+  });
+
+  const __faceColors = [
+    new THREE.MeshBasicMaterial({ color: 0xff6666 }), // RIGHT
+    new THREE.MeshBasicMaterial({ color: 0x66ff66 }), // LEFT
+    new THREE.MeshBasicMaterial({ color: 0x6666ff }), // TOP
+    new THREE.MeshBasicMaterial({ color: 0xffff66 }), // BOTTOM
+    new THREE.MeshBasicMaterial({ color: 0xff66ff }), // FRONT
+    new THREE.MeshBasicMaterial({ color: 0x66ffff }), // BACK
+  ];
+
+  const __wireframeMat = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, transparent: true, opacity: 0.20 });
+
+  function __applyVisibility() {
+    for (const inst of instances) {
+      if (!inst || !inst.group) continue;
+      // lights
+      if (inst.lights && inst.lights.mesh) inst.lights.mesh.visible = !!LIGHTS_ENABLED;
+      // inside overlay stays visible as authored
+    }
+  }
+
+  function __applyMaterialMode() {
+    for (const inst of instances) {
+      if (!inst || !inst.baseMesh) continue;
+
+      // cache original
+      if (!inst.__origBaseMats) inst.__origBaseMats = inst.baseMesh.material;
+      if (inst.insideMesh && !inst.__origInsideMat) inst.__origInsideMat = inst.insideMesh.material;
+
+      if (DEBUG_MAT_MODE === "uv") {
+        inst.baseMesh.material = [__uvTestMat, __uvTestMat, __uvTestMat, __uvTestMat, __uvTestMat, __uvTestMat];
+        if (inst.insideMesh) inst.insideMesh.visible = false;
+      } else if (DEBUG_MAT_MODE === "faces") {
+        inst.baseMesh.material = __faceColors;
+        if (inst.insideMesh) inst.insideMesh.visible = false;
+      } else {
+        inst.baseMesh.material = inst.__origBaseMats;
+        if (inst.insideMesh) { inst.insideMesh.material = inst.__origInsideMat; inst.insideMesh.visible = true; }
+      }
+
+      // optional wireframe overlay: add/remove a helper mesh
+      if (DEBUG_SHOW_WIREFRAME) {
+        if (!inst.__wire) {
+          inst.__wire = new THREE.Mesh(inst.baseMesh.geometry, __wireframeMat);
+          inst.__wire.scale.setScalar(1.002);
+          inst.group.add(inst.__wire);
+        }
+        inst.__wire.visible = true;
+      } else {
+        if (inst.__wire) inst.__wire.visible = false;
+      }
+    }
+  }
+
+  function __clearLabels() {
+    for (const inst of instances) {
+      if (inst.__label) {
+        inst.group.remove(inst.__label);
+        inst.__label.material?.map?.dispose?.();
+        inst.__label.material?.dispose?.();
+        inst.__label = null;
+      }
+    }
+  }
+
+  function __makeLabelSprite(text) {
+    const w = 256, h = 128;
+    const c = document.createElement("canvas");
+    c.width = w; c.height = h;
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillRect(0,0,w,h);
+    ctx.strokeStyle = "rgba(255,255,255,0.45)";
+    ctx.strokeRect(2,2,w-4,h-4);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 22px ui-monospace,Consolas,monospace";
+    const lines = text.split("\n");
+    for (let i=0;i<lines.length;i++) ctx.fillText(lines[i], 10, 30 + i*26);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+    const spr = new THREE.Sprite(mat);
+    spr.scale.set(1.2, 0.6, 1);
+    spr.position.set(0, 0.65, 0);
+    return spr;
+  }
+
+  function __applyLabels() {
+    __clearLabels();
+    if (!DEBUG_SHOW_LABELS) return;
+    for (const inst of instances) {
+      const txt = `(${inst.x},${inst.y},${inst.z})\n${inst.type}`;
+      inst.__label = __makeLabelSprite(txt);
+      inst.group.add(inst.__label);
+    }
+  }
+
+  // rebuild: clear all groups and rebuild instances in-place (for toggling Pure AE2)
+  function __rebuildWorld() {
+    // clear groups
+    for (const g of layerGroups) {
+      while (g.children.length) g.remove(g.children[0]);
+    }
+    while (compassGroup.children.length) compassGroup.remove(compassGroup.children[0]);
+
+    instances.length = 0;
+
+    // (re-run the build loop) — easiest: reload page state via location.reload for correctness
+    // but we keep it in-process to avoid cache issues.
+    // NOTE: This rebuild assumes placed set is constant and makeInstance uses DEBUG_PURE_AE2.
+    for (let x = 0; x < GRID_SIZE; x++) {
+      for (let y = 0; y < GRID_SIZE; y++) {
+        for (let z = 0; z < GRID_SIZE; z++) {
+          if (!hasBlock(x, y, z)) continue;
+          const inst = makeInstance(x, y, z);
+          const layerIndex =
+            (y === 6) ? 0 :
+            (y === 5) ? 1 :
+            (y === 4) ? 2 :
+            (y === 3) ? 3 :
+            (y === 2) ? 4 :
+            (y === 1) ? 5 :
+            (y === 0) ? 6 :
+            -1;
+          if (layerIndex >= 0) layerGroups[layerIndex].add(inst.group);
+          else scene.add(inst.group);
+          instances.push(inst);
+        }
+      }
+    }
+
+    // re-add compass labels and re-apply modes
+    addWorldCompassLabels();
+    __applyVisibility();
+    __applyMaterialMode();
+    __applyLabels();
+    __requestRender();
+  }
+
+
       }
     }
   }
@@ -833,9 +1036,6 @@ instances.push(inst);
   function addWorldCompassLabels() {
     if (!instances.length) return;
 
-    // clear existing labels (idempotent)
-    while (compassGroup.children.length) compassGroup.remove(compassGroup.children[0]);
-
     const box = new THREE.Box3();
     for (const inst of instances) box.expandByObject(inst.group);
 
@@ -851,6 +1051,123 @@ instances.push(inst);
     // place at mid-height, outside each side
     const y = center.y;
 
+    // ---- Rotation hotfix (block-wise, applied per 3×3 sub-cube) ----
+    // Same approach as the completed 3×3×3 demo:
+    // rotate the 4 'edge-center' blocks (x=mid within the 3×3, z=min/max, y=min/max) by +90°.
+    // Here, the pattern exists in 4 corners of the 7×7 grid: (0..2,0..2), (4..6,0..2), (0..2,4..6), (4..6,4..6).
+    const rotateMatTexture = (mat, delta) => {
+      if (!mat) return;
+
+      const tex = mat.map || mat.emissiveMap || null;
+      if (!tex) return;
+
+      const isCanvasTex =
+        !!tex.isCanvasTexture ||
+        (tex.image &&
+          (tex.image instanceof HTMLCanvasElement || tex.image?.tagName === "CANVAS"));
+
+      if (isCanvasTex) {
+        tex.center?.set(0.5, 0.5);
+        tex.rotation = (tex.rotation || 0) + delta;
+        tex.needsUpdate = true;
+        mat.needsUpdate = true;
+        return;
+      }
+
+      const base = tex;
+      const t = base.clone();
+      t.center.set(0.5, 0.5);
+      t.rotation = (base.rotation || 0) + delta;
+      t.needsUpdate = true;
+
+      if (mat.map) mat.map = t;
+      if ("emissiveMap" in mat && mat.emissiveMap) mat.emissiveMap = t;
+      mat.needsUpdate = true;
+    };
+
+    const rotateAllFacesInMesh = (mesh, delta) => {
+      if (!mesh || !mesh.material) return;
+
+      const seenCanvas = new Set();
+
+      const rotateOne = (mat) => {
+        if (!mat) return;
+        const tex = mat.map || mat.emissiveMap || null;
+        if (!tex) return;
+
+        const isCanvasTex =
+          !!tex.isCanvasTexture ||
+          (tex.image &&
+            (tex.image instanceof HTMLCanvasElement || tex.image?.tagName === "CANVAS"));
+
+        if (isCanvasTex) {
+          if (seenCanvas.has(tex)) return;
+          seenCanvas.add(tex);
+        }
+        rotateMatTexture(mat, delta);
+      };
+
+      if (Array.isArray(mesh.material) && mesh.material.length >= 6) {
+        for (let fi = 0; fi < 6; fi++) rotateOne(mesh.material[fi]);
+      } else {
+        rotateOne(mesh.material);
+      }
+    };
+
+    const rotateBlockTextures = (group, delta) => {
+      if (!group) return;
+      group.traverse((obj) => {
+        if (obj && obj.isMesh) rotateAllFacesInMesh(obj, delta);
+      });
+    };
+
+    const findInst = (x, y, z) =>
+      instances.find(
+        (i) =>
+          i &&
+          typeof i.x === "number" &&
+          typeof i.y === "number" &&
+          typeof i.z === "number" &&
+          Math.abs(i.x - x) < 1e-6 &&
+          Math.abs(i.y - y) < 1e-6 &&
+          Math.abs(i.z - z) < 1e-6
+      );
+
+    const Q = Math.PI / 2;
+
+    // 4 corner 3×3 sub-cubes in 7×7 grid
+    const corners = [
+      { x0: 0, z0: 0 },
+      { x0: 4, z0: 0 },
+      { x0: 0, z0: 4 },
+      { x0: 4, z0: 4 },
+    ];
+
+    const applyHotfixForYRange = (minY, maxY) => {
+      for (const c of corners) {
+        const midX = c.x0 + 1;
+        const minZ = c.z0;
+        const maxZ = c.z0 + 2;
+
+        const targets = [
+          { x: midX, y: maxY, z: minZ },
+          { x: midX, y: minY, z: minZ },
+          { x: midX, y: maxY, z: maxZ },
+          { x: midX, y: minY, z: maxZ },
+        ];
+
+        for (const t of targets) {
+          const inst = findInst(t.x, t.y, t.z);
+          if (inst) rotateBlockTextures(inst.group, Q);
+        }
+      }
+    };
+
+    // Top 3 layers (1..3): y=6,5,4
+    applyHotfixForYRange(4, 6);
+    // Bottom 3 layers (5..7): y=2,1,0
+    applyHotfixForYRange(0, 2);
+
     north.position.set(center.x, y, box.min.z - margin);
     south.position.set(center.x, y, box.max.z + margin);
     west.position.set(box.min.x - margin, y, center.z);
@@ -860,6 +1177,12 @@ instances.push(inst);
   }
 
   addWorldCompassLabels();
+  __applyVisibility();
+  __applyMaterialMode();
+  __applyLabels();
+  __refreshDebugPanel();
+  __requestRender();
+
 
   // -------------------------------
   // UI: Layer visibility + Compass toggle
@@ -1029,9 +1352,11 @@ instances.push(inst);
 
         drawFrame(src.ctxA, src.img, a);
         src.texA.needsUpdate = true;
+        if (src.texA_tb) src.texA_tb.needsUpdate = true;
 
         drawFrame(src.ctxB, src.img, b);
         src.texB.needsUpdate = true;
+        if (src.texB_tb) src.texB_tb.needsUpdate = true;
       }
     }
 
@@ -1041,7 +1366,10 @@ instances.push(inst);
     }
   }
 
-  // -------------------------------
+  
+  __ensureDebugPanel();
+  __refreshDebugPanel();
+// -------------------------------
   // Render loop
   // -------------------------------
   let __needsRender = true;
