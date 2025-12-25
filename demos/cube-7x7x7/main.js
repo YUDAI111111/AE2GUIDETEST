@@ -31,7 +31,6 @@ const FACE_BACK  = 5;  // -Z (north)
 const ROT_90 = Math.PI / 2;
 
 const ROT90_NORTH_SOUTH = new Set([16, 20, 30, 34]);
-const ROT90_UP_DOWN = new Set([2, 6, 11, 16, 20, 30, 34, 39, 44, 48]);
 
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 
@@ -62,18 +61,6 @@ function faceNumSouth(x,y,z){
   const col = x;
   return row * GRID + col + 1;
 }
-function faceNumUp(x,y,z){
-  // top face y==6: 04 side is north => north edge center is (x=3,z=0) => 4.
-  const row = z; // z 0..6 north->south
-  const col = x;
-  return row * GRID + col + 1;
-}
-function faceNumDown(x,y,z){
-  // bottom face y==0: same orientation spec
-  const row = z;
-  const col = x;
-  return row * GRID + col + 1;
-}
 
 function needsRot90ForFace(x,y,z,faceIndex){
   // Apply ONLY to the specified face-number rules (for both base + lights)
@@ -84,10 +71,10 @@ function needsRot90ForFace(x,y,z,faceIndex){
     return ROT90_NORTH_SOUTH.has(faceNumSouth(x,y,z));
   }
   if (faceIndex === FACE_TOP && y === GRID-1) { // up
-    return ROT90_UP_DOWN.has(faceNumUp(x,y,z));
+    return ROT90_ENABLE_UP_DOWN && ROT90_UP_DOWN.has(faceNumUp(x,y,z));
   }
   if (faceIndex === FACE_BOTTOM && y === 0) { // down
-    return ROT90_UP_DOWN.has(faceNumDown(x,y,z));
+    return ROT90_ENABLE_UP_DOWN && ROT90_UP_DOWN.has(faceNumDown(x,y,z));
   }
   return false;
 }
