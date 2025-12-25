@@ -260,14 +260,6 @@ controls.enableDamping = true;
   const BASE_EMISSIVE = 0.45;
   const INSIDE_EMISSIVE = 0.75;
 
-  // Invisible material for faces that should not be rendered.
-  // makeInstance() assigns this into the base material array; keep it as a single shared instance.
-  const invisibleMat = new THREE.MeshStandardMaterial({
-    transparent: true,
-    opacity: 0.0,
-    depthWrite: false,
-  });
-
   function makeBaseMaterials(baseTexture, topBottomRotation) {
     const makeMat = (t) =>
       new THREE.MeshStandardMaterial({
@@ -426,6 +418,7 @@ controls.enableDamping = true;
     faceMapA[FACE_LEFT]  = texA; faceMapB[FACE_LEFT]  = texB;
     faceMapA[FACE_FRONT] = texA; faceMapB[FACE_FRONT] = texB;
     faceMapA[FACE_BACK]  = texA; faceMapB[FACE_BACK]  = texB;
+
     if (topBottomRotation != null) {
       faceMapA[FACE_TOP]    = texA_tb; faceMapB[FACE_TOP]    = texB_tb;
       faceMapA[FACE_BOTTOM] = texA_tb; faceMapB[FACE_BOTTOM] = texB_tb;
@@ -573,22 +566,6 @@ const isColumn = type.startsWith("column");
     const baseTex = isColumn ? texColumnBase : texBlockBase;
 
     const baseMats = makeBaseMaterials(baseTex, topBottomRotation);
-
-    // base rotation correction (must match lights +90° rule)
-    for (let fi = 0; fi < 6; fi++) {
-      if (faceMask && faceMask[fi] && __needsLightRot90(fi, x, y, z)) {
-        const mat = baseMats[fi];
-        if (mat && mat.map) {
-          const t = mat.map.clone();
-          t.center.set(0.5, 0.5);
-          t.rotation = (t.rotation || 0) + (Math.PI / 2);
-          t.needsUpdate = true;
-          mat.map = t;
-          if (mat.emissiveMap) mat.emissiveMap = t;
-          mat.needsUpdate = true;
-        }
-      }
-    }
     const baseMesh = new THREE.Mesh(baseGeo, baseMats);
 
     // lights
@@ -820,9 +797,9 @@ instances.push(inst);
     };
 
     // Top 3 layers (1..3): y=6,5,4
-    // applyHotfixForYRange(4, 6); // disabled: use explicit face-number rules instead
+    applyHotfixForYRange(4, 6);
     // Bottom 3 layers (5..7): y=2,1,0
-    // applyHotfixForYRange(0, 2); // disabled: use explicit face-number rules instead
+    applyHotfixForYRange(0, 2);
 
     north.position.set(center.x, y, box.min.z - margin);
     south.position.set(center.x, y, box.max.z + margin);
