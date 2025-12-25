@@ -315,13 +315,9 @@ function makeMixMaterial(texA, texB, mixUniform){
 
     shader.fragmentShader = shader.fragmentShader.replace(
       "#include <common>",
-      "#include <common>
-uniform sampler2D mapB;
-uniform float mixAlpha;
-"
+      "#include <common>\nuniform sampler2D mapB;\nuniform float mixAlpha;\n"
     );
-
-    shader.fragmentShader = shader.fragmentShader.replace(
+shader.fragmentShader = shader.fragmentShader.replace(
       "#include <map_fragment>",
       `
 #ifdef USE_MAP
