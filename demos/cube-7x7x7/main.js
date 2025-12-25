@@ -29,13 +29,79 @@ const FACE_FRONT = 4;  // +Z (south)
 const FACE_BACK  = 5;  // -Z (north)
 
 const ROT_90 = Math.PI / 2;
+// Face index mapping (matches makeMCBoxGeometry groups)
+// 0:+X 1:-X 2:+Y 3:-Y 4:+Z 5:-Z
+const FACE_NAME_BY_INDEX = ["EAST(+X)","WEST(-X)","UP(+Y)","DOWN(-Y)","SOUTH(+Z)","NORTH(-Z)"];
+
+function dirName(dir){
+  if (!dir) return "UNKNOWN";
+  const [x,y,z] = dir;
+  if (x === 1) return "EAST(+X)";
+  if (x === -1) return "WEST(-X)";
+  if (y === 1) return "UP(+Y)";
+  if (y === -1) return "DOWN(-Y)";
+  if (z === 1) return "SOUTH(+Z)";
+  if (z === -1) return "NORTH(-Z)";
+  return `(${x},${y},${z})`;
+}
+
+// Per-block per-face rotation state (quarter-turns 0..3) stored as Euler-like (rx,ry,rz).
+// For a given face, only one axis is "active":
+//  - faces 0/1 (±X): use rx
+//  - faces 2/3 (±Y): use ry
+//  - faces 4/5 (±Z): use rz
+const __FACE_ROT_DB_KEY = "cube7x7x7_face_rot_db_v1";
+const __faceRotDb = new Map(); // key "x,y,z|face" -> {rx,ry,rz}
+function __rotKey(x,y,z,face){ return `${x},${y},${z}|${face}`; }
+
+function __loadFaceRotDb(){
+  try{
+    const raw = localStorage.getItem(__FACE_ROT_DB_KEY);
+    if (!raw) return;
+    const obj = JSON.parse(raw);
+    for (const [k,v] of Object.entries(obj)){
+      if (!v) continue;
+      __faceRotDb.set(k, { rx: (v.rx|0)&3, ry:(v.ry|0)&3, rz:(v.rz|0)&3 });
+    }
+  }catch(e){ console.warn("[rotDB] load failed", e); }
+}
+function __saveFaceRotDb(){
+  try{
+    const obj = {};
+    for (const [k,v] of __faceRotDb.entries()){
+      obj[k] = { rx:(v.rx|0)&3, ry:(v.ry|0)&3, rz:(v.rz|0)&3 };
+    }
+    localStorage.setItem(__FACE_ROT_DB_KEY, JSON.stringify(obj));
+  }catch(e){ console.warn("[rotDB] save failed", e); }
+}
+function __defaultFaceRotXYZ(x,y,z,face){
+  // Default comes from the original rule-based rot90 (needsRot90ForFace).
+  const r = { rx:0, ry:0, rz:0 };
+  const q = needsRot90ForFace(x,y,z,face) ? 1 : 0; // +90° as quarter-turns
+  if (face === 0 || face === 1) r.rx = q;
+  else if (face === 2 || face === 3) r.ry = q;
+  else r.rz = q;
+  return r;
+}
+function __getFaceRotXYZ(x,y,z,face){
+  const k = __rotKey(x,y,z,face);
+  const v = __faceRotDb.get(k);
+  if (v) return v;
+  const d = __defaultFaceRotXYZ(x,y,z,face);
+  __faceRotDb.set(k, d);
+  return d;
+}
+function __getFaceRotQ(x,y,z,face){
+  const r = __getFaceRotXYZ(x,y,z,face);
+  if (face === 0 || face === 1) return (r.rx|0)&3;
+  if (face === 2 || face === 3) return (r.ry|0)&3;
+  return (r.rz|0)&3;
+}
+
 
 const ROT90_NORTH_SOUTH = new Set([16, 20, 30, 34]);
+const ROT90_UP_DOWN = new Set([11, 39]);
 
-// UP/DOWN faces: rotate UV by +90° around Y axis (i.e., within the TOP/BOTTOM face plane)
-// for specific (x,z) columns; apply to ALL y in those columns.
-// key format: "x,z".
-const ROT90_UP_DOWN_XZ = new Set(["1,6","1,4","1,2","1,0","3,5","3,6","3,4","3,2","3,1","3,0","5,6","5,4","5,2","5,0"]);
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 
 function posKey(x,y,z){ return `${x},${y},${z}`; }
@@ -65,6 +131,18 @@ function faceNumSouth(x,y,z){
   const col = x;
   return row * GRID + col + 1;
 }
+function faceNumUp(x,y,z){
+  // top face y==6: 04 side is north => north edge center is (x=3,z=0) => 4.
+  const row = z; // z 0..6 north->south
+  const col = x;
+  return row * GRID + col + 1;
+}
+function faceNumDown(x,y,z){
+  // bottom face y==0: same orientation spec
+  const row = z;
+  const col = x;
+  return row * GRID + col + 1;
+}
 
 function needsRot90ForFace(x,y,z,faceIndex){
   // Apply ONLY to the specified face-number rules (for both base + lights)
@@ -74,11 +152,11 @@ function needsRot90ForFace(x,y,z,faceIndex){
   if (faceIndex === FACE_FRONT && z === GRID-1) { // south face
     return ROT90_NORTH_SOUTH.has(faceNumSouth(x,y,z));
   }
-  if (faceIndex === FACE_TOP) { // up (apply per (x,z) column for all y)
-    return ROT90_UP_DOWN_XZ.has(`${x},${z}`);
+  if (faceIndex === FACE_TOP && y === GRID-1) { // up
+    return ROT90_UP_DOWN.has(faceNumUp(x,y,z));
   }
-  if (faceIndex === FACE_BOTTOM) { // down (apply per (x,z) column for all y)
-    return ROT90_UP_DOWN_XZ.has(`${x},${z}`);
+  if (faceIndex === FACE_BOTTOM && y === 0) { // down
+    return ROT90_UP_DOWN.has(faceNumDown(x,y,z));
   }
   return false;
 }
@@ -144,9 +222,38 @@ function makeDebugUI(){
 
   const pickBox = document.createElement("div");
   pickBox.style.cssText = "margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.15)";
-  pickBox.innerHTML = `<div style="font-weight:600;margin-bottom:4px">Pick</div><div id="pickText">Pick: none</div>`;
+  pickBox.innerHTML = `<div style="font-weight:600;margin-bottom:4px">Pick</div><div id="pickText">Pick: none</div>
+<div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.12)">
+  <div style="font-weight:600;margin-bottom:6px">Rotate (per block, per face)</div>
+  <div id="rotSel" style="white-space:pre-wrap;color:rgba(255,255,255,0.9)">No selection</div>
+  <div style="margin-top:6px;display:grid;grid-template-columns:auto 1fr;gap:6px;align-items:center">
+    <div>X</div><div><button id="rxm">-90</button><button id="rxp">+90</button> <span id="rxv"></span></div>
+    <div>Y</div><div><button id="rym">-90</button><button id="ryp">+90</button> <span id="ryv"></span></div>
+    <div>Z</div><div><button id="rzm">-90</button><button id="rzp">+90</button> <span id="rzv"></span></div>
+  </div>
+  <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+    <button id="rotReset">Reset to rule</button>
+    <button id="rotCopy">Copy report</button>
+  </div>
+  <div id="rotHint" style="margin-top:6px;color:rgba(255,255,255,0.75)">
+    Note: For one face, only one axis is typically relevant (±X→X, ±Y→Y, ±Z→Z). We still store X/Y/Z for clarity.
+  </div>
+</div>
+`;
   root.appendChild(pickBox);
   const pickText = pickBox.querySelector("#pickText");
+  const rotSel = pickBox.querySelector("#rotSel");
+  const rxm = pickBox.querySelector("#rxm");
+  const rxp = pickBox.querySelector("#rxp");
+  const rym = pickBox.querySelector("#rym");
+  const ryp = pickBox.querySelector("#ryp");
+  const rzm = pickBox.querySelector("#rzm");
+  const rzp = pickBox.querySelector("#rzp");
+  const rxv = pickBox.querySelector("#rxv");
+  const ryv = pickBox.querySelector("#ryv");
+  const rzv = pickBox.querySelector("#rzv");
+  const rotReset = pickBox.querySelector("#rotReset");
+  const rotCopy = pickBox.querySelector("#rotCopy");
 
   const texBox = document.createElement("div");
   texBox.style.cssText = "margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.15)";
@@ -197,7 +304,7 @@ function makeDebugUI(){
   }
 
 
-  return { root, mkToggle, mkSelect, pickText, texList };
+  return { root, mkToggle, mkSelect, pickText, texList, rotSel, rxm, rxp, rym, ryp, rzm, rzp, rxv, ryv, rzv, rotReset, rotCopy };
 }
 
 // -----------------------------
@@ -385,7 +492,17 @@ function makeMixMaterial(texA, texB, mixUniform){
   return mat;
 }
 
-function rotateTexture90(tex){
+function rotateTextureQ(tex, q){
+  const qq = ((q|0)%4+4)%4;
+  if (qq === 0) return tex;
+  const t = tex.clone();
+  t.center.set(0.5,0.5);
+  t.rotation = ROT_90 * qq;
+  t.needsUpdate = true;
+  return t;
+}
+
+function rotateTextureQ(tex, rotQ){
   // Clone and apply +90° rotation around center (0.5,0.5)
   const t = tex.clone();
   t.center.set(0.5,0.5);
@@ -513,6 +630,7 @@ function stepLightSource(src, dt, speed=1.0){
   document.body.style.background = "#000";
 
   const dbg = makeDebugUI();
+  __loadFaceRotDb();
 
   // Scene / camera / renderer
   const scene = new THREE.Scene();
@@ -534,12 +652,35 @@ function stepLightSource(src, dt, speed=1.0){
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.addEventListener("change", () => { requestRender(); });
   // --- Wheel zoom tuning (mouse wheel) ---
-  controls.zoomSpeed = 0.25;
+  // The default OrbitControls wheel zoom can be finicky on some trackpads; use a
+  // deterministic fine-grained dolly instead.
+  controls.enableZoom = false;
+  controls.zoomSpeed = 0.25; // kept for completeness (unused when enableZoom=false)
   controls.minDistance = 4;
   controls.maxDistance = 180;
 
-  // Prevent page scroll while the pointer is over the canvas.
-  renderer.domElement.addEventListener("wheel", (e) => { e.preventDefault(); }, { passive: false });
+  // Ensure OrbitControls receives wheel / touch gestures consistently.
+  renderer.domElement.style.touchAction = "none";
+  if ("zoomToCursor" in controls) controls.zoomToCursor = true;
+
+  // Fine-grained zoom (trackpad/mouse wheel). This also prevents page scrolling.
+  const __zoomBase = 1.00025; // smaller = finer zoom
+  renderer.domElement.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const dy = e.deltaY;
+    if (!dy) return;
+    const mag = Math.min(240, Math.abs(dy));
+    const factor = Math.pow(__zoomBase, mag);
+    const v = new THREE.Vector3().copy(camera.position).sub(controls.target);
+    if (dy > 0) v.multiplyScalar(factor); else v.multiplyScalar(1 / factor);
+    // Clamp to min/max distance
+    const len = v.length();
+    if (len < controls.minDistance) v.setLength(controls.minDistance);
+    if (len > controls.maxDistance) v.setLength(controls.maxDistance);
+    camera.position.copy(controls.target).add(v);
+    controls.update();
+    requestRender();
+  }, { passive: false });
 
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
@@ -590,23 +731,88 @@ function stepLightSource(src, dt, speed=1.0){
     mouse.y = -(((ev.clientY - rect.top) / rect.height) * 2 - 1);
     raycaster.setFromCamera(mouse, camera);
     const hits = raycaster.intersectObjects(worldGroup.children, true);
-    if (!hits.length){
+    const hit = hits.find(h => h && h.object && h.object.isInstancedMesh && h.instanceId != null && h.object.userData && h.object.userData.instanceMeta);
+    if (!hit){
       pickInfo = null;
       dbg.pickText.textContent = "Pick: none";
+      __updateRotEditor && __updateRotEditor(null);
       return;
     }
-    // find top-level block group
-    let o = hits[0].object;
-    while (o && o.parent && o.parent !== worldGroup) o = o.parent;
-    if (!o || !o.userData || !o.userData.block) {
+    const meta = hit.object.userData.instanceMeta[hit.instanceId];
+    if (!meta){
       pickInfo = null;
       dbg.pickText.textContent = "Pick: none";
+      __updateRotEditor && __updateRotEditor(null);
       return;
     }
-    pickInfo = o.userData.block;
-    dbg.pickText.textContent = `Pick: (${pickInfo.x},${pickInfo.y},${pickInfo.z}) type=${pickInfo.type} rot=(${pickInfo.rx.toFixed(2)},${pickInfo.ry.toFixed(2)},${pickInfo.rz.toFixed(2)})`;
-    console.log("[PICK]", pickInfo);
+    pickInfo = meta;
+    const wd = meta.worldDir ? ` worldDir=(${meta.worldDir[0]},${meta.worldDir[1]},${meta.worldDir[2]})` : "";
+    dbg.pickText.textContent = `Pick: (${meta.x},${meta.y},${meta.z}) type=${meta.type} localFace=${meta.face}${wd} rot=(${meta.rx.toFixed(2)},${meta.ry.toFixed(2)},${meta.rz.toFixed(2)})`;
+    console.log("[PICK]", meta);
+    __updateRotEditor(pickInfo);
   });
+    // Update rotation editor UI
+    function __updateRotEditor(sel){
+      if (!sel){
+        dbg.rotSel.textContent = "No selection";
+        dbg.rxv.textContent = dbg.ryv.textContent = dbg.rzv.textContent = "";
+        return;
+      }
+      const r = __getFaceRotXYZ(sel.x, sel.y, sel.z, sel.face);
+      dbg.rotSel.textContent =
+        `Selected: (${sel.x},${sel.y},${sel.z})\n` +
+        `type=${sel.type}\n` +
+        `localFace=${sel.face} ${FACE_NAME_BY_INDEX[sel.face] || ""}\n` +
+        `world=${dirName(sel.worldDir)}\n` +
+        `stored rot (quarters): X=${r.rx} Y=${r.ry} Z=${r.rz}  (degrees: X=${r.rx*90} Y=${r.ry*90} Z=${r.rz*90})`;
+      dbg.rxv.textContent = `${r.rx} (${r.rx*90}°)`;
+      dbg.ryv.textContent = `${r.ry} (${r.ry*90}°)`;
+      dbg.rzv.textContent = `${r.rz} (${r.rz*90}°)`;
+    }
+
+    function __bumpAxis(sel, axis, delta){
+      if (!sel) return;
+      const k = __rotKey(sel.x, sel.y, sel.z, sel.face);
+      const r = __getFaceRotXYZ(sel.x, sel.y, sel.z, sel.face);
+      const rr = { rx:r.rx, ry:r.ry, rz:r.rz };
+      if (axis === "x") rr.rx = (rr.rx + delta) & 3;
+      if (axis === "y") rr.ry = (rr.ry + delta) & 3;
+      if (axis === "z") rr.rz = (rr.rz + delta) & 3;
+      __faceRotDb.set(k, rr);
+      __saveFaceRotDb();
+      __updateRotEditor(sel);
+      rebuildWorld();
+    }
+
+    dbg.rxm.addEventListener("click", ()=> __bumpAxis(pickInfo, "x", -1));
+    dbg.rxp.addEventListener("click", ()=> __bumpAxis(pickInfo, "x",  1));
+    dbg.rym.addEventListener("click", ()=> __bumpAxis(pickInfo, "y", -1));
+    dbg.ryp.addEventListener("click", ()=> __bumpAxis(pickInfo, "y",  1));
+    dbg.rzm.addEventListener("click", ()=> __bumpAxis(pickInfo, "z", -1));
+    dbg.rzp.addEventListener("click", ()=> __bumpAxis(pickInfo, "z",  1));
+
+    dbg.rotReset.addEventListener("click", ()=>{
+      if (!pickInfo) return;
+      const k = __rotKey(pickInfo.x, pickInfo.y, pickInfo.z, pickInfo.face);
+      __faceRotDb.set(k, __defaultFaceRotXYZ(pickInfo.x, pickInfo.y, pickInfo.z, pickInfo.face));
+      __saveFaceRotDb();
+      __updateRotEditor(pickInfo);
+      rebuildWorld();
+    });
+
+    dbg.rotCopy.addEventListener("click", async ()=>{
+      if (!pickInfo) return;
+      const r = __getFaceRotXYZ(pickInfo.x, pickInfo.y, pickInfo.z, pickInfo.face);
+      const line = `(${pickInfo.x},${pickInfo.y},${pickInfo.z}) type=${pickInfo.type} localFace=${pickInfo.face} ${FACE_NAME_BY_INDEX[pickInfo.face]||""} world=${dirName(pickInfo.worldDir)} rotXYZ_quarters={x:${r.rx},y:${r.ry},z:${r.rz}}`;
+      try{
+        await navigator.clipboard.writeText(line);
+      }catch(e){
+        console.log("[COPY]", line);
+      }
+    });
+
+    __updateRotEditor(null);
+
 
   // Texture loader with status list
   const texLoader = new THREE.TextureLoader();
@@ -705,8 +911,53 @@ function stepLightSource(src, dt, speed=1.0){
     preflightImage(TEX.inside_b_l),
   ]);
 
-  // Shared geometry
-  const geom = makeMCBoxGeometry(1.0);
+  // -----------------------------
+  // Shared geometry (PERF): render ONLY visible faces using InstancedMesh
+  // -----------------------------
+  // Front face plane matching makeMCBoxGeometry's FACE_FRONT vertex order + UV.
+  function makeMCFacePlaneGeometry(size=1.0, zOffset=0.5){
+    const s = size * 0.5;
+    const pos = [
+      -s, -s,  zOffset,
+       s, -s,  zOffset,
+       s,  s,  zOffset,
+      -s,  s,  zOffset,
+    ];
+    const nrm = [0,0,1, 0,0,1, 0,0,1, 0,0,1];
+    const uv  = [0,0, 1,0, 1,1, 0,1];
+    const idx = [0,1,2, 0,2,3];
+    const g = new THREE.BufferGeometry();
+    g.setIndex(idx);
+    g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute("normal", new THREE.Float32BufferAttribute(nrm, 3));
+    g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+    g.computeBoundingSphere();
+    return g;
+  }
+
+  // Visible surface geometry: base + a slightly offset copy for additive lights.
+  const faceGeom = makeMCFacePlaneGeometry(1.0, 0.5);
+  const faceGeomLight = makeMCFacePlaneGeometry(1.0, 0.501);
+
+  // Local face orientation matrices (from a +Z plane).
+  const __faceRotEuler = [
+    new THREE.Euler(0, ROT_90, 0),           // RIGHT  (+X)
+    new THREE.Euler(0, -ROT_90, 0),          // LEFT   (-X)
+    new THREE.Euler(-ROT_90, 0, 0),          // TOP    (+Y)
+    new THREE.Euler(ROT_90, 0, 0),           // BOTTOM (-Y)
+    new THREE.Euler(0, 0, 0),                // FRONT  (+Z)
+    new THREE.Euler(0, Math.PI, 0),          // BACK   (-Z)
+  ];
+
+  // Pre-baked face transforms (rotation * translate(+Z 0.5)).
+  const __faceMat = new Array(6);
+  const __tmpQ = new THREE.Quaternion();
+  for (let f=0; f<6; f++){
+    const r = __faceRotEuler[f];
+    __tmpQ.setFromEuler(r);
+    // Translation is already embedded in the face geometry's zOffset.
+    __faceMat[f] = new THREE.Matrix4().makeRotationFromQuaternion(__tmpQ);
+  }
 
   // Base materials (created from loaded textures)
   function baseMaterialFromTexture(tex){
@@ -849,54 +1100,178 @@ function stepLightSource(src, dt, speed=1.0){
     }
   }
 
+  // Rebuild stats for quick sanity checks.
+  let __lastWorldStats = { blocks: 0, faces: 0, meshes: 0 };
+
   function rebuildWorld(){
-    const __t0 = safeNowMs();
     clearGroup(worldGroup);
 
-    const faceMatsCache = null; // not used; per block computed
+    // -----------------------------
+    // Materials cache per rebuild
+    // -----------------------------
+    const __rotTexCache = new WeakMap();
+    const __baseMatCache = new Map();
+    const __lightMatCache = new Map();
+    const __uvMat = baseMaterialFromTexture(uvTestTex);
+    __uvMat.wireframe = WIREFRAME;
+    const __faceColorMats = (MATERIAL_MODE === "faces") ? makeFaceColorMats() : null;
+
+    function __getRotTex(tex){
+      if (!tex) return tex;
+      if (__rotTexCache.has(tex)) return __rotTexCache.get(tex);
+      const t = rotateTextureQ(tex, rotQ);
+      __rotTexCache.set(tex, t);
+      return t;
+    }
+
+    function __baseMatFor(type, faceIndex, rotQ){
+      if (MATERIAL_MODE === "uv") return __uvMat;
+      if (MATERIAL_MODE === "faces") return __faceColorMats[faceIndex];
+
+      const baseTex = typeToBaseTexture(type);
+      const useTex = rot90 ? __getRotTex(baseTex) : baseTex;
+      const key = `ae2|${type}|${rotQ}|${useTex?useTex.uuid:"null"}|wf=${WIREFRAME}`;
+      if (__baseMatCache.has(key)) return __baseMatCache.get(key);
+      const mat = baseMaterialFromTexture(useTex);
+      __baseMatCache.set(key, mat);
+      return mat;
+    }
+
+    function __lightMatFor(type, rotQ){
+      if (!(LIGHTS_ENABLED && MATERIAL_MODE === "ae2")) return null;
+      const src = typeToLightSource(type);
+      const key = `${src.url}|${rotQ}|wf=${WIREFRAME}`;
+      if (__lightMatCache.has(key)) return __lightMatCache.get(key);
+
+      // In this demo, the light sheets are the same for all faces (faceMapA/B are filled with texA/texB),
+      // so we can use a single mix material per type (+ optional rot90).
+      let tA = src.texA;
+      let tB = src.texB;
+      if (rot90){
+        tA = __getRotTex(tA);
+        tB = __getRotTex(tB);
+      }
+      const mat = makeMixMaterial(tA, tB, src.mixUniform);
+      mat.wireframe = WIREFRAME;
+      __lightMatCache.set(key, mat);
+      return mat;
+    }
+
+    // -----------------------------
+    // Instancing groups
+    // -----------------------------
+    const groups = new Map(); // key -> { geom, mat, matrices: Matrix4[], meta: any[] }
+    function __push(groupKey, geom, mat, matrix, meta){
+      let g = groups.get(groupKey);
+      if (!g){
+        g = { geom, mat, matrices: [], meta: [] };
+        groups.set(groupKey, g);
+      }
+      g.matrices.push(matrix);
+      g.meta.push(meta);
+    }
+
+    // Local normals in face-index order
+    const __localNormals = [
+      new THREE.Vector3( 1, 0, 0),
+      new THREE.Vector3(-1, 0, 0),
+      new THREE.Vector3( 0, 1, 0),
+      new THREE.Vector3( 0,-1, 0),
+      new THREE.Vector3( 0, 0, 1),
+      new THREE.Vector3( 0, 0,-1),
+    ];
+
+    function __dirFromNormal(n){
+      const ax = Math.abs(n.x), ay = Math.abs(n.y), az = Math.abs(n.z);
+      if (ax > 0.5) return [n.x > 0 ? 1 : -1, 0, 0];
+      if (ay > 0.5) return [0, n.y > 0 ? 1 : -1, 0];
+      return [0, 0, n.z > 0 ? 1 : -1];
+    }
+
+    function __blockEuler(type){
+      // Same as applyBlockRotation, but returned as Euler for math.
+      if (type === "column_z") return new THREE.Euler(ROT_90, 0, 0);
+      if (type === "column_x") return new THREE.Euler(ROT_90, ROT_90, 0);
+      return new THREE.Euler(0, 0, 0); // block, inside_*, column_y
+    }
+
+    const __one = new THREE.Vector3(1,1,1);
+    const __pos = new THREE.Vector3();
+    const __quat = new THREE.Quaternion();
+    const __mBlock = new THREE.Matrix4();
+    const __m = new THREE.Matrix4();
+    const __worldN = new THREE.Vector3();
+
+    const blocksCount = placed.size;
+    let facesCount = 0;
+
     for (let y=0; y<GRID; y++){
       for (let z=0; z<GRID; z++){
         for (let x=0; x<GRID; x++){
           if (!placed.has(posKey(x,y,z))) continue;
 
           const type = classifyType(x,y,z, placed);
+          const e = __blockEuler(type);
+          __quat.setFromEuler(e);
+          __pos.set((x*SPACING)-OFFSET, (y*SPACING)-OFFSET, (z*SPACING)-OFFSET);
+          __mBlock.compose(__pos, __quat, __one);
 
-          const g = new THREE.Group();
-          g.position.set((x*SPACING)-OFFSET, (y*SPACING)-OFFSET, (z*SPACING)-OFFSET);
-          applyBlockRotation(g, type);
-
-          const { baseMats, lightMats } = buildMaterialsForBlock(x,y,z,type);
-
-          const baseMesh = new THREE.Mesh(geom, baseMats);
-          g.add(baseMesh);
-
-          if (LIGHTS_ENABLED && lightMats){
-            // Slightly larger to prevent z-fighting
-            const lightMesh = new THREE.Mesh(geom, lightMats);
-            lightMesh.scale.set(1.002, 1.002, 1.002);
-            g.add(lightMesh);
-          }
-
+          // Optional labels (debug) - keep identical behavior, but only when enabled.
           if (LABELS_ENABLED){
             const sp = makeLabel(`${x},${y},${z}`);
-            sp.position.set(0, 0.7, 0);
-            g.add(sp);
+            sp.position.copy(__pos).add(new THREE.Vector3(0, 0.7, 0));
+            worldGroup.add(sp);
           }
 
-          g.userData.block = {
-            x,y,z,type,
-            rx: g.rotation.x, ry: g.rotation.y, rz: g.rotation.z,
-          };
+          for (let f=0; f<6; f++){
+            // Determine which WORLD direction this LOCAL face points to after block rotation,
+            // then cull faces that are adjacent to another block in that direction.
+            __worldN.copy(__localNormals[f]).applyEuler(e);
+            const dir = __dirFromNormal(__worldN);
+            const nx = x + dir[0];
+            const ny = y + dir[1];
+            const nz = z + dir[2];
+            const neighborInside = (nx >= 0 && nx < GRID && ny >= 0 && ny < GRID && nz >= 0 && nz < GRID) && placed.has(posKey(nx,ny,nz));
+            if (neighborInside) continue;
 
-          worldGroup.add(g);
+            const rotQ = __getFaceRotQ(x,y,z,f);
+            const baseMat = __baseMatFor(type, f, rotQ);
+            __m.copy(__mBlock).multiply(__faceMat[f]);
+            __push(`B|${baseMat.uuid}`, faceGeom, baseMat, __m.clone(), { x,y,z,type, face:f, rx:e.x, ry:e.y, rz:e.z, worldDir:dir, rotQ: rotQ, rotXYZ: __getFaceRotXYZ(x,y,z,f) });
+            facesCount++;
+
+            const lightMat = __lightMatFor(type, rotQ);
+            if (lightMat){
+              // Same transform; geometry is slightly offset to prevent z-fighting.
+              __push(`L|${lightMat.uuid}`, faceGeomLight, lightMat, __m.clone(), { x,y,z,type, face:f, rx:e.x, ry:e.y, rz:e.z, worldDir:dir, rotQ: rotQ, rotXYZ: __getFaceRotXYZ(x,y,z,f) });
+            }
+          }
         }
       }
     }
+
+    // Build instanced meshes
+    for (const g of groups.values()){
+      const count = g.matrices.length;
+      if (!count) continue;
+      const inst = new THREE.InstancedMesh(g.geom, g.mat, count);
+      // Safer for small demos: avoid bounding-sphere issues with instancing.
+      inst.frustumCulled = false;
+      inst.userData.instanceMeta = g.meta;
+      for (let i=0; i<count; i++) inst.setMatrixAt(i, g.matrices[i]);
+      inst.instanceMatrix.needsUpdate = true;
+      worldGroup.add(inst);
+    }
+
+    __lastWorldStats = { blocks: blocksCount, faces: facesCount, meshes: worldGroup.children.length };
+    requestRender();
   }
 
   rebuildWorld();
   // show block count immediately
-  try { dbg.pickText.textContent = `Pick: none (blocks=${worldGroup.children.length})`; } catch(e) {}
+  try {
+    dbg.pickText.textContent = `Pick: none (blocks=${__lastWorldStats.blocks}, visibleFaces=${__lastWorldStats.faces}, meshes=${__lastWorldStats.meshes})`;
+  } catch(e) {}
   // ---- DevTools exposure (module scope -> window) ----
   // This is required because ES modules do not create global variables; without this, `scene` / `rebuildWorld`
   // are `undefined` in the console. Expose minimal handles for fact-based debugging.
