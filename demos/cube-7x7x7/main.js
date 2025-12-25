@@ -1,968 +1,879 @@
-// demos/cube-7x7x7/main.js（このファイルを全文置き換え）
+// demos/cube-7x7x7/main.js
+// Clean rebuild: AE2 Controller type logic (column/inside) + stable lights crossfade + debug panel.
+// Constraints honored:
+// - Column direction is expressed via whole-block mesh rotation (no per-face UV "pillar direction" hacks).
+// - Special +90° rotation for specific face numbers is applied to BOTH base and lights on those faces.
+// - Single file; no external deps beyond Three.js + OrbitControls.
+//
+// Notes:
+// - This file assumes the same folder structure as the original repo.
+// - Assets referenced here are the existing demo assets used by your current pages.
+//
+// Authoring intent: stable, no ReferenceError, deterministic scope.
 
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-function fatal(e) {
-  console.error(e);
-  const pre = document.createElement("pre");
-  pre.style.cssText =
-    "position:fixed;inset:0;white-space:pre-wrap;word-break:break-word;margin:0;padding:12px;" +
-    "background:#0b0b0b;color:#ffb4b4;font:12px/1.4 ui-monospace,Consolas,monospace;z-index:9999;overflow:auto;";
-  pre.textContent = String(e?.stack || e);
-  document.body.appendChild(pre);
+// -----------------------------
+// Utilities / constants
+// -----------------------------
+const GRID = 7;
+const SPACING = 1.0;
+const OFFSET = (GRID - 1) * 0.5 * SPACING;
+
+const FACE_RIGHT = 0;  // +X
+const FACE_LEFT  = 1;  // -X
+const FACE_TOP   = 2;  // +Y
+const FACE_BOTTOM= 3;  // -Y
+const FACE_FRONT = 4;  // +Z (south)
+const FACE_BACK  = 5;  // -Z (north)
+
+const ROT_90 = Math.PI / 2;
+
+const ROT90_NORTH_SOUTH = new Set([16, 20, 30, 34]);
+const ROT90_UP_DOWN = new Set([11, 39]);
+
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+function posKey(x,y,z){ return `${x},${y},${z}`; }
+
+function layerY(layerIndex1to7){
+  // layer 1 is top => y=6 ; layer 7 is bottom => y=0
+  return GRID - layerIndex1to7;
 }
 
-try {
-  // -------------------------------
-  // Scene
-  // -------------------------------
-  const scene = new THREE.Scene();
+function idxToXZ(n1to49){
+  // numbering: left-top -> right, row-major; 1..49
+  const i = n1to49 - 1;
+  const row = Math.floor(i / GRID);
+  const col = i % GRID;
+  return { x: col, z: row };
+}
 
-  // -------------------------------
-  // Layer groups (1..7) + Compass group (toggleable)
-  // -------------------------------
-  const layerGroups = Array.from({ length: 7 }, (_, i) => {
-    const g = new THREE.Group();
-    g.name = `layer-${i + 1}`;
-    return g;
-  });
-  for (const g of layerGroups) scene.add(g);
+function faceNumNorth(x,y,z){
+  // north face: z==0, numbering left=west (x 0..6), top=up (y 6..0)
+  const row = (GRID - 1) - y; // y6 -> row0
+  const col = x;
+  return row * GRID + col + 1;
+}
+function faceNumSouth(x,y,z){
+  // south face: z==6, "south face as seen looking north": left=west, top=up
+  const row = (GRID - 1) - y;
+  const col = x;
+  return row * GRID + col + 1;
+}
+function faceNumUp(x,y,z){
+  // top face y==6: 04 side is north => north edge center is (x=3,z=0) => 4.
+  const row = z; // z 0..6 north->south
+  const col = x;
+  return row * GRID + col + 1;
+}
+function faceNumDown(x,y,z){
+  // bottom face y==0: same orientation spec
+  const row = z;
+  const col = x;
+  return row * GRID + col + 1;
+}
 
-  const compassGroup = new THREE.Group();
-  compassGroup.name = "compass";
-  scene.add(compassGroup);
-  scene.background = new THREE.Color(0x0b0b0b);
-
-  const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 1000);
-  camera.position.set(11.0, 11.0, 13.5);
-
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-
-  // Render-on-demand helpers (used by wheel/UI handlers)
-  renderer.setSize(innerWidth, innerHeight);
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-  document.body.style.margin = "0";
-  document.body.style.overflow = "hidden";
-  document.body.appendChild(renderer.domElement);
-
-  const controls = new OrbitControls(camera, renderer.domElement);
-  
-  // Controls tuning:
-  // - disable panning to avoid "where did it go?" after zooming
-  // - disable dolly-to-cursor behavior (trackpads can feel like drifting)
-  // - set sane min/max distance and provide a reset button in UI
-  controls.enablePan = false;
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.08;
-  controls.zoomSpeed = 0.25;
-  controls.rotateSpeed = 0.55;
-  controls.minDistance = 4.0;
-  controls.maxDistance = 80.0;
-  
-
-  // Fine-grained zoom: disable OrbitControls' default wheel zoom and implement small-step dolly.
-  controls.enableZoom = false;
-  const __zoomBase = 1.00025; // smaller = finer zoom (trackpad-friendly)
-  renderer.domElement.addEventListener(
-    "wheel",
-    (e) => {
-      e.preventDefault();
-      // Normalize: use magnitude but clamp per event (trackpads can emit huge deltas)
-      const dy = e.deltaY;
-      const mag = Math.min(240, Math.abs(dy));
-      const factor = Math.pow(__zoomBase, mag);
-      if (dy > 0) {
-        // zoom out
-        camera.position.sub(controls.target).multiplyScalar(factor).add(controls.target);
-      } else if (dy < 0) {
-        // zoom in
-        camera.position.sub(controls.target).multiplyScalar(1 / factor).add(controls.target);
-      }
-      // clamp distance
-      const d = camera.position.distanceTo(controls.target);
-      if (d < controls.minDistance) {
-        camera.position.sub(controls.target).setLength(controls.minDistance).add(controls.target);
-      } else if (d > controls.maxDistance) {
-        camera.position.sub(controls.target).setLength(controls.maxDistance).add(controls.target);
-      }
-      controls.update();
-      __requestRender();
-    },
-    { passive: false }
-  );
-controls.screenSpacePanning = false;
-  if ("dollyToCursor" in controls) controls.dollyToCursor = false;
-  // Touch: avoid 2-finger pan (use dolly+rotate)
-  if (controls.touches && typeof THREE !== "undefined" && THREE.TOUCH && THREE.TOUCH.DOLLY_ROTATE != null) {
-    controls.touches.TWO = THREE.TOUCH.DOLLY_ROTATE;
+function needsRot90ForFace(x,y,z,faceIndex){
+  // Apply ONLY to the specified face-number rules (for both base + lights)
+  if (faceIndex === FACE_BACK && z === 0) { // north face
+    return ROT90_NORTH_SOUTH.has(faceNumNorth(x,y,z));
   }
-controls.enableDamping = true;
-  controls.target.set(0, 0, 0);
-  controls.update();
+  if (faceIndex === FACE_FRONT && z === GRID-1) { // south face
+    return ROT90_NORTH_SOUTH.has(faceNumSouth(x,y,z));
+  }
+  if (faceIndex === FACE_TOP && y === GRID-1) { // up
+    return ROT90_UP_DOWN.has(faceNumUp(x,y,z));
+  }
+  if (faceIndex === FACE_BOTTOM && y === 0) { // down
+    return ROT90_UP_DOWN.has(faceNumDown(x,y,z));
+  }
+  return false;
+}
 
-  controls.addEventListener('change', () => { if (!ANIM_ENABLED) __requestRender(); });
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x202020, 0.8));
-  const dir = new THREE.DirectionalLight(0xffffff, 1.0);
-  dir.position.set(6, 10, 6);
-  scene.add(dir);
+function safeNowMs(){ return (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now(); }
 
-  // -------------------------------
-  // Hollow 3×3×3 shell layout
-  // -------------------------------
-    const GRID_SIZE = 7;
-  const SPACING = 1.0;
-  const OFFSET = (GRID_SIZE - 1) * 0.5 * SPACING; // 3.0
+// -----------------------------
+// Debug UI
+// -----------------------------
+function makeDebugUI(){
+  const root = document.createElement("div");
+  root.style.cssText = [
+    "position:fixed;top:10px;right:10px;z-index:9999",
+    "font:12px/1.35 ui-monospace,Consolas,monospace",
+    "color:#eaeaea;background:rgba(0,0,0,0.65)",
+    "border:1px solid rgba(255,255,255,0.15)",
+    "border-radius:8px;padding:10px;min-width:260px",
+    "user-select:none"
+  ].join(";");
 
-  // -------------------------------
-  // Layout: 7×7, Layers 1–7 (top-down numbering 1..49, 4番側が北)
-// - Layer 1: blocks exist except blanks {4, 9, 13, 18, 22, 24, 25, 26, 28, 32, 37, 41, 46}
-// - Layer 2: blocks exist at {1, 3, 4, 5, 7, 15, 17, 18, 19, 21, 22, 24, 26, 28, 29, 31, 32, 33, 35, 43, 45, 46, 47, 49}
-// - Layer 3: same as Layer 1
-// - Layer 4: blocks exist at {2, 6, 8, 10, 12, 14, 16, 20, 30, 34, 36, 38, 40, 42, 44, 48}
-// - Layer 5: same as Layer 1
-// - Layer 6: same as Layer 2
-// - Layer 7: same as Layer 1
-// Y mapping (7-high world): layer1->y=6 ... layer7->y=0
-// -------------------------------
+  const title = document.createElement("div");
+  title.textContent = "cube-7x7x7 DEBUG";
+  title.style.cssText = "font-weight:700;margin-bottom:8px";
+  root.appendChild(title);
+
+  const mkToggle = (label, initial, onChange)=>{
+    const wrap = document.createElement("label");
+    wrap.style.cssText = "display:flex;gap:8px;align-items:center;margin:4px 0;";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = !!initial;
+    cb.addEventListener("change", ()=> onChange(cb.checked));
+    const sp = document.createElement("span");
+    sp.textContent = label;
+    wrap.appendChild(cb);
+    wrap.appendChild(sp);
+    root.appendChild(wrap);
+    return cb;
+  };
+
+  const mkSelect = (label, options, onChange)=>{
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "display:flex;gap:8px;align-items:center;margin-top:6px";
+    const sp = document.createElement("span");
+    sp.textContent = label;
+    const sel = document.createElement("select");
+    sel.style.cssText = "flex:1;background:#111;color:#eee;border:1px solid rgba(255,255,255,0.2);border-radius:6px;padding:2px 6px";
+    for (const o of options){
+      const opt = document.createElement("option");
+      opt.value = o.value;
+      opt.textContent = o.label;
+      sel.appendChild(opt);
+    }
+    sel.addEventListener("change", ()=> onChange(sel.value));
+    wrap.appendChild(sp);
+    wrap.appendChild(sel);
+    root.appendChild(wrap);
+    return sel;
+  };
+
+  const pickBox = document.createElement("div");
+  pickBox.style.cssText = "margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.15)";
+  pickBox.innerHTML = `<div style="font-weight:600;margin-bottom:4px">Pick</div><div id="pickText">Pick: none</div>`;
+  root.appendChild(pickBox);
+  const pickText = pickBox.querySelector("#pickText");
+
+  const texBox = document.createElement("div");
+  texBox.style.cssText = "margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.15)";
+  texBox.innerHTML = `<div style="font-weight:600;margin-bottom:4px">Textures</div><div id="texList"></div>`;
+  root.appendChild(texBox);
+  const texList = texBox.querySelector("#texList");
+
+  const hint = document.createElement("div");
+  hint.style.cssText = "margin-top:8px;color:rgba(255,255,255,0.8)";
+  hint.textContent = "Click a block to inspect its (x,y,z), type, rotations. Use Material=UV test to verify per-face UV.";
+  root.appendChild(hint);
+
+  document.body.appendChild(root);
+
+  return { root, mkToggle, mkSelect, pickText, texList };
+}
+
+// -----------------------------
+// AE2 controller placement: 7x7x7 demo layout
+// -----------------------------
+function buildPlacedSet(){
+  // From your description (same as previous demo):
+  // layer1 blanks: {4, 9, 13, 18, 22, 24, 25, 26, 28, 32, 37, 41, 46}
+  // layer2 filled: {1, 3, 4, 5, 7, 15, 17, 18, 19, 21, 22, 24, 26, 28, 29, 31, 32, 33, 35, 43, 45, 46, 47, 49}
+  // layer4 filled: {2, 6, 8, 10, 12, 14, 16, 20, 30, 34, 36, 38, 40, 42, 44, 48}
   const layer1Blanks = new Set([4, 9, 13, 18, 22, 24, 25, 26, 28, 32, 37, 41, 46]);
   const layer2Filled = new Set([1, 3, 4, 5, 7, 15, 17, 18, 19, 21, 22, 24, 26, 28, 29, 31, 32, 33, 35, 43, 45, 46, 47, 49]);
   const layer4Filled = new Set([2, 6, 8, 10, 12, 14, 16, 20, 30, 34, 36, 38, 40, 42, 44, 48]);
 
-  const key = (x, y, z) => `${x},${y},${z}`;
   const placed = new Set();
 
-  function idxToXZ(idx) {
-    const row = Math.floor((idx - 1) / GRID_SIZE); // 0..6 (north->south)
-    const col = (idx - 1) % GRID_SIZE;             // 0..6 (west->east)
-    return { x: col, z: row };
-  }
-
-  function placeLayerFromRule(y, isFilledFn) {
-    for (let idx = 1; idx <= GRID_SIZE * GRID_SIZE; idx++) {
-      if (!isFilledFn(idx)) continue;
-      const { x, z } = idxToXZ(idx);
-      placed.add(key(x, y, z));
+  for (let layer = 1; layer <= 7; layer++){
+    const y = layerY(layer);
+    for (let n = 1; n <= 49; n++){
+      let fill = false;
+      if (layer === 1 || layer === 3 || layer === 5 || layer === 7){
+        fill = !layer1Blanks.has(n);
+      } else if (layer === 2 || layer === 6){
+        fill = layer2Filled.has(n);
+      } else if (layer === 4){
+        fill = layer4Filled.has(n);
+      }
+      if (!fill) continue;
+      const { x, z } = idxToXZ(n);
+      placed.add(posKey(x,y,z));
     }
   }
+  return placed;
+}
 
-  // Layer 1 (y=6): filled when NOT blank
-  placeLayerFromRule(6, (idx) => !layer1Blanks.has(idx));
-  // Layer 2 (y=5): filled when listed
-  placeLayerFromRule(5, (idx) => layer2Filled.has(idx));
-  // Layer 3 (y=4): same as Layer 1
-  placeLayerFromRule(4, (idx) => !layer1Blanks.has(idx));
-  // Layer 4 (y=3): filled when listed
-  placeLayerFromRule(3, (idx) => layer4Filled.has(idx));
-  // Layer 5 (y=2): same as Layer 1
-  placeLayerFromRule(2, (idx) => !layer1Blanks.has(idx));
-  // Layer 6 (y=1): same as Layer 2
-  placeLayerFromRule(1, (idx) => layer2Filled.has(idx));
-  // Layer 7 (y=0): same as Layer 1
-  placeLayerFromRule(0, (idx) => !layer1Blanks.has(idx));
+// -----------------------------
+// AE2 classify logic (facts from user)
+// -----------------------------
+function classifyType(x,y,z, placed){
+  const has = (xx,yy,zz)=> placed.has(posKey(xx,yy,zz));
+  const sx = has(x-1,y,z) && has(x+1,y,z);
+  const sy = has(x,y-1,z) && has(x,y+1,z);
+  const sz = has(x,y,z-1) && has(x,y,z+1);
 
-  const hasBlock = (x, y, z) => placed.has(key(x, y, z));
-// -------------------------------
-  // Textures
-  // -------------------------------
-  const loader = new THREE.TextureLoader();
+  const count = (sx?1:0) + (sy?1:0) + (sz?1:0);
 
-  function loadTex(url) {
-    const t = loader.load(url);
-    t.colorSpace = THREE.SRGBColorSpace;
-    t.anisotropy = 8;
-    t.wrapS = THREE.ClampToEdgeWrapping;
-    t.wrapT = THREE.ClampToEdgeWrapping;
-    t.magFilter = THREE.NearestFilter;
-    t.minFilter = THREE.NearestMipmapNearestFilter;
-    return t;
+  if (count >= 2){
+    const parity = (Math.abs(x)+Math.abs(y)+Math.abs(z)) & 1;
+    return parity === 0 ? "inside_a" : "inside_b";
   }
-
-  // base
-  const texBlockBase = loadTex("../hollow-3x3x3/assets/controller_powered.png");
-  const texColumnBase = loadTex("../hollow-3x3x3/assets/controller_column_powered.png");
-
-  // lights sheets
-  const LIGHT_SHEET_BLOCK_URL = "../hollow-3x3x3/assets/controller_lights.png";
-  const LIGHT_SHEET_COLUMN_URL = "../hollow-3x3x3/assets/controller_column_lights.png";
-
-  // inside
-  const texInsideA = loadTex("../hollow-3x3x3/assets/controller_inside_a_powered.png");
-  const texInsideB = loadTex("../hollow-3x3x3/assets/controller_inside_b_powered.png");
-
-  // -------------------------------
-  // Geometry / Face indices (BoxGeometry order)
-  // [right, left, top, bottom, front, back]
-  // -------------------------------
-  const baseGeo = new THREE.BoxGeometry(1, 1, 1);
-  const insideGeo = new THREE.BoxGeometry(0.92, 0.92, 0.92);
-
-  const FACE_RIGHT = 0, FACE_LEFT = 1, FACE_TOP = 2, FACE_BOTTOM = 3, FACE_FRONT = 4, FACE_BACK = 5;
-
-  // -------------------------------
-  // World/local face mapping
-  // - We rotate the whole block (group.rotation) to express column direction.
-  // - Therefore, visibility and per-world-face corrections must be mapped onto local face indices.
-  // Face index order follows BoxGeometry: RIGHT, LEFT, TOP, BOTTOM, FRONT(south +Z), BACK(north -Z)
-  const WORLD_RIGHT = FACE_RIGHT;
-  const WORLD_LEFT = FACE_LEFT;
-  const WORLD_TOP = FACE_TOP;
-  const WORLD_BOTTOM = FACE_BOTTOM;
-  const WORLD_SOUTH = FACE_FRONT;
-  const WORLD_NORTH = FACE_BACK;
-
-  const __LOCAL_FACE_NORMALS = [
-    new THREE.Vector3( 1, 0, 0), // RIGHT
-    new THREE.Vector3(-1, 0, 0), // LEFT
-    new THREE.Vector3( 0, 1, 0), // TOP
-    new THREE.Vector3( 0,-1, 0), // BOTTOM
-    new THREE.Vector3( 0, 0, 1), // FRONT (south)
-    new THREE.Vector3( 0, 0,-1), // BACK  (north)
-  ];
-
-  function __worldFaceFromNormal(n) {
-    const ax = Math.abs(n.x), ay = Math.abs(n.y), az = Math.abs(n.z);
-    if (ax >= ay && ax >= az) return n.x >= 0 ? WORLD_RIGHT : WORLD_LEFT;
-    if (ay >= ax && ay >= az) return n.y >= 0 ? WORLD_TOP : WORLD_BOTTOM;
-    return n.z >= 0 ? WORLD_SOUTH : WORLD_NORTH;
-  }
-
-  // Precompute localFace -> worldFace for each block type (based on group.rotation).
-  const __FACE_LOCAL_TO_WORLD = (() => {
-    const mapForAngles = (rx, ry) => {
-      const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, 0, "XYZ"));
-      return __LOCAL_FACE_NORMALS.map((v) => __worldFaceFromNormal(v.clone().applyQuaternion(q)));
-    };
-    return {
-      block:    mapForAngles(0, 0),
-      inside:   mapForAngles(0, 0),
-      column_y: mapForAngles(0, 0),
-      column_z: mapForAngles(Math.PI / 2, 0),
-      column_x: mapForAngles(Math.PI / 2, Math.PI / 2),
-    };
-  })();
-
-  function __worldVisibleMask(x, y, z) {
-    // per WORLD_* (same numeric indices as FACE_*)
-    const m = [];
-    m[WORLD_RIGHT]  = !hasBlock(x + 1, y, z);
-    m[WORLD_LEFT]   = !hasBlock(x - 1, y, z);
-    m[WORLD_TOP]    = !hasBlock(x, y + 1, z);
-    m[WORLD_BOTTOM] = !hasBlock(x, y - 1, z);
-    m[WORLD_SOUTH]  = !hasBlock(x, y, z + 1);
-    m[WORLD_NORTH]  = !hasBlock(x, y, z - 1);
-    return m;
-  }
-
-  function __needsRot90World(worldFace, x, y, z) {
-    if (z === GRID_SIZE - 1 && worldFace === WORLD_SOUTH) {
-      return __LIGHT_ROT90.south.has(__numXY(x, y));
-    }
-    if (z === 0 && worldFace === WORLD_NORTH) {
-      return __LIGHT_ROT90.north.has(__numXY(x, y));
-    }
-    if (y === GRID_SIZE - 1 && worldFace === WORLD_TOP) {
-      return __LIGHT_ROT90.top.has(__numXZ(x, z));
-    }
-    if (y === 0 && worldFace === WORLD_BOTTOM) {
-      return __LIGHT_ROT90.bottom.has(__numXZ(x, z));
-    }
-    return false;
-  }
-
-
-  // -------------------------------
-  // AE2-like connectivity rules
-  // -------------------------------
-
-  // Sandwiched on axis => column_axis
-  // Sandwiched on 2+ axes => inside (A/B parity)
-  // else => block
-  function classifyType(x, y, z) {
-    const sx = hasBlock(x - 1, y, z) && hasBlock(x + 1, y, z);
-    const sy = hasBlock(x, y - 1, z) && hasBlock(x, y + 1, z);
-    const sz = hasBlock(x, y, z - 1) && hasBlock(x, y, z + 1);
-
-    const count = (sx ? 1 : 0) + (sy ? 1 : 0) + (sz ? 1 : 0);
-    if (count >= 2) return "inside";
+  if (count === 1){
     if (sx) return "column_x";
     if (sy) return "column_y";
-    if (sz) return "column_z";
-    return "block";
+    return "column_z"; // sz true
+  }
+  return "block";
+}
+
+// -----------------------------
+// Textures
+// -----------------------------
+const ASSET_BASE = "../hollow-3x3x3/assets"; // same base used by your current demos
+
+const TEX = {
+  block:           `${ASSET_BASE}/controller_powered.png`,
+  column:          `${ASSET_BASE}/controller_column_powered.png`,
+  inside_a:        `${ASSET_BASE}/controller_inside_a_powered.png`,
+  inside_b:        `${ASSET_BASE}/controller_inside_b_powered.png`,
+  // lights (sprite sheets)
+  block_l:         `${ASSET_BASE}/controller_lights.png`,
+  column_l:        `${ASSET_BASE}/controller_column_lights.png`,
+  inside_a_l:      `${ASSET_BASE}/controller_inside_a_lights.png`,
+  inside_b_l:      `${ASSET_BASE}/controller_inside_b_lights.png`,
+};
+
+// -----------------------------
+// UV-consistent cube geometry (Minecraft-like orientation)
+// -----------------------------
+// Three.js BoxGeometry's UV orientation differs per face; this creates "mixed" appearance even without logic issues.
+// This custom geometry enforces a consistent UV convention per face: U increases to +X (or +Z) and V increases to +Y,
+// matching typical Minecraft block UV expectations.
+function makeMCBoxGeometry(size=1.0){
+  const s = size * 0.5;
+
+  // vertices per face (2 triangles)
+  // For each face, define positions and UVs consistently.
+  const positions = [];
+  const normals = [];
+  const uvs = [];
+  const indices = [];
+  let vbase = 0;
+
+  function addFace(p0,p1,p2,p3, n){
+    // p0..p3 are corners in CCW order when looking at the face from outside
+    positions.push(...p0, ...p1, ...p2, ...p3);
+    normals.push(...n, ...n, ...n, ...n);
+    // UV: (0,0) at p0, (1,0) at p1, (1,1) at p2, (0,1) at p3
+    uvs.push(0,0, 1,0, 1,1, 0,1);
+    indices.push(vbase, vbase+1, vbase+2, vbase, vbase+2, vbase+3);
+    vbase += 4;
   }
 
-  // 任意の連続3ブロックがあれば、その軸方向に「引っ張られる」扱い（端も含む）
-  // [REMOVED] pullAxisFor: column orientation is expressed by mesh rotation only.
+  // +X (right): looking from +X toward origin, up=+Y, right=+Z
+  addFace([ s,-s,-s],[ s,-s, s],[ s, s, s],[ s, s,-s],[1,0,0]);
+  // -X (left): looking from -X, up=+Y, right=-Z
+  addFace([-s,-s, s],[-s,-s,-s],[-s, s,-s],[-s, s, s],[-1,0,0]);
+  // +Y (top): looking from +Y, up=-Z, right=+X (so north is "up" on texture)
+  addFace([-s, s, s],[ s, s, s],[ s, s,-s],[-s, s,-s],[0,1,0]);
+  // -Y (bottom): looking from -Y, up=+Z, right=+X
+  addFace([-s,-s,-s],[ s,-s,-s],[ s,-s, s],[-s,-s, s],[0,-1,0]);
+  // +Z (front/south): looking from +Z, up=+Y, right=-X? (keep U to +X, so right should be +X; CCW accordingly)
+  addFace([-s,-s, s],[ s,-s, s],[ s, s, s],[-s, s, s],[0,0,1]);
+  // -Z (back/north): looking from -Z, up=+Y, right=+X
+  addFace([ s,-s,-s],[-s,-s,-s],[-s, s,-s],[ s, s,-s],[0,0,-1]);
 
+  const g = new THREE.BufferGeometry();
+  g.setIndex(indices);
+  g.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  g.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
+  g.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  g.computeBoundingSphere();
+  return g;
+}
 
-  // 上下面（立方体の上の面・下の面）の向きを “列方向” に合わせるための回転
-  // X方向に引っ張る: 90deg
-  // Z方向に引っ張る: 0deg
-  // Y方向: ここでは回転不要（column_y時はモデル回転で表現）
-  // [REMOVED] topBottomRotationFor: column orientation is expressed by mesh rotation only.
-
-
-  // -------------------------------
-  // Materials
-  // -------------------------------
-  const BASE_EMISSIVE = 0.45;
-  const INSIDE_EMISSIVE = 0.75;
-
-  function makeBaseMaterials(baseTexture) {
-    const makeMat = (t) =>
-      new THREE.MeshStandardMaterial({
-        map: t,
-        emissiveMap: t,
-        emissive: new THREE.Color(0xffffff),
-        emissiveIntensity: BASE_EMISSIVE,
-      });
-
-    // 6 faces share the same base texture; any required +90° correction is applied later per-face.
-    return Array(6).fill(null).map(() => makeMat(baseTexture));
-  }
-
-  function __rotateMatTexture(mat, delta) {
-    if (!mat) return;
-    const tex = mat.map || mat.emissiveMap || null;
-    if (!tex) return;
-
-    // Canvas textures (lights) are rotated via shader uniform; base textures use texture clone.
-    const isCanvasTex =
-      !!tex.isCanvasTexture ||
-      (tex.image &&
-        (tex.image instanceof HTMLCanvasElement || tex.image?.tagName === "CANVAS"));
-
-    if (isCanvasTex) {
-      // For safety; base path should not reach here.
-      tex.center?.set(0.5, 0.5);
-      tex.rotation = (tex.rotation || 0) + delta;
-      tex.needsUpdate = true;
-      mat.needsUpdate = true;
-      return;
-    }
-
-    const t = tex.clone();
-    t.center.set(0.5, 0.5);
-    t.rotation = (tex.rotation || 0) + delta;
-    t.needsUpdate = true;
-
-    if (mat.map) mat.map = t;
-    if ("emissiveMap" in mat && mat.emissiveMap) mat.emissiveMap = t;
-    mat.needsUpdate = true;
-  }
-
-
-  // shared invisible material for hidden faces
-  const invisibleMat = new THREE.MeshStandardMaterial({
+// -----------------------------
+// Light shader mix material factory
+// -----------------------------
+function makeMixMaterial(texA, texB, mixUniform){
+  const mat = new THREE.MeshStandardMaterial({
+    map: texA,
+    emissiveMap: texA,
+    emissive: new THREE.Color(0xffffff),
+    emissiveIntensity: 2.0,
     transparent: true,
-    opacity: 0.0,
+    opacity: 1.0,
     depthWrite: false,
-    colorWrite: false,
   });
 
+  mat.onBeforeCompile = (shader)=>{
+    shader.uniforms.mapB = { value: texB };
+    shader.uniforms.mixAlpha = mixUniform;
 
-  // -------------------------------
-  // Lights (sprite-sheet -> canvas textures -> crossfade)
-  let LIGHTS_ENABLED = true;
-  let ANIM_ENABLED = true;
-  let LIGHTS_FPS = 6; // reduced for performance
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <common>",
+      "#include <common>\nuniform sampler2D mapB;\nuniform float mixAlpha;\n"
+    );
 
-  // -------------------------------
-    // OPT(A+B): single-mesh crossfade (shader patch) + shared sources (update once per sheet/rotation)
-  // -------------------------------
-  const W = 16, H = 16;
-
-  function mkCanvasTex(canvas, rotation) {
-    const tex = new THREE.CanvasTexture(canvas);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.anisotropy = 8;
-    tex.wrapS = THREE.ClampToEdgeWrapping;
-    tex.wrapT = THREE.ClampToEdgeWrapping;
-    tex.magFilter = THREE.NearestFilter;
-    tex.minFilter = THREE.NearestMipmapNearestFilter;
-
-    if (rotation != null) {
-      tex.center.set(0.5, 0.5);
-      tex.rotation = rotation;
-    }
-    tex.needsUpdate = true;
-    return tex;
-  }
-
-  function drawFrame(ctx, img, idx) {
-    ctx.clearRect(0, 0, W, H);
-    ctx.drawImage(img, 0, idx * H, W, H, 0, 0, W, H);
-  }
-
-  // Patch MeshStandardMaterial to blend map(A) and mapB with a shared mixAlpha uniform.
-  function makeCrossfadeLightMat(mapA, mapB, sharedMixAlpha, uvRot) {
-    const mat = new THREE.MeshStandardMaterial({
-      map: mapA,
-      transparent: true,
-      opacity: 1.0,
-      emissiveMap: mapA,
-      emissive: new THREE.Color(0xffffff),
-      emissiveIntensity: 2.0,
-      depthWrite: false,
-    });
-
-    mat.userData.__mixAlpha = sharedMixAlpha;
-    mat.userData.__uvRot = uvRot || 0.0;
-
-    mat.onBeforeCompile = (shader) => {
-      shader.uniforms.mapB = { value: mapB };
-      shader.uniforms.mixAlpha = sharedMixAlpha;
-      shader.uniforms.uvRot = { value: mat.userData.__uvRot };
-
-      shader.fragmentShader = shader.fragmentShader.replace(
-        "#include <common>",
-        "#include <common>\nuniform sampler2D mapB;\nuniform float mixAlpha;\nuniform float uvRot;\n\nvec2 __rotUv(vec2 uv, float a){\n  if(a==0.0) return uv;\n  uv -= vec2(0.5);\n  float s = sin(a);\n  float c = cos(a);\n  uv = mat2(c,-s,s,c) * uv;\n  uv += vec2(0.5);\n  return uv;\n}"
-      );
-
-      shader.fragmentShader = shader.fragmentShader.replace(
-        "#include <map_fragment>",
-        `
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <map_fragment>",
+      `
 #ifdef USE_MAP
-  vec2 __uvA = __rotUv( vMapUv, uvRot );
-  vec4 texelColorA = texture2D( map, __uvA );
-  vec4 texelColorB = texture2D( mapB, __uvA );
-  vec4 texelColor = mix( texelColorA, texelColorB, mixAlpha );
+  vec4 texelColorA = texture2D( map, vMapUv );
+  vec4 texelColorB = texture2D( mapB, vMapUv );
+  vec4 texelColor = mix(texelColorA, texelColorB, mixAlpha);
   texelColor = mapTexelToLinear( texelColor );
   diffuseColor *= texelColor;
 #endif
-        `
-      );
+      `
+    );
 
-      shader.fragmentShader = shader.fragmentShader.replace(
-        "#include <emissivemap_fragment>",
-        `
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <emissivemap_fragment>",
+      `
 #ifdef USE_EMISSIVEMAP
-  vec2 __uvE = __rotUv( vEmissiveMapUv, uvRot );
-  vec4 emissiveColorA = texture2D( emissiveMap, __uvE );
-  vec4 emissiveColorB = texture2D( mapB, __uvE );
-  emissiveColorA = emissiveMapTexelToLinear( emissiveColorA );
-  emissiveColorB = emissiveMapTexelToLinear( emissiveColorB );
-  totalEmissiveRadiance *= mix( emissiveColorA.rgb, emissiveColorB.rgb, mixAlpha );
+  vec4 eA = texture2D( emissiveMap, vEmissiveMapUv );
+  vec4 eB = texture2D( mapB, vEmissiveMapUv );
+  eA = emissiveMapTexelToLinear(eA);
+  eB = emissiveMapTexelToLinear(eB);
+  totalEmissiveRadiance *= mix(eA.rgb, eB.rgb, mixAlpha);
 #endif
-        `
-      );
-    };
+      `
+    );
+  };
 
-    return mat;
+  return mat;
+}
+
+function rotateTexture90(tex){
+  // Clone and apply +90° rotation around center (0.5,0.5)
+  const t = tex.clone();
+  t.center.set(0.5,0.5);
+  t.rotation = ROT_90;
+  t.needsUpdate = true;
+  return t;
+}
+
+// -----------------------------
+// Lights sheet decoding (robust, no scoping bugs)
+// -----------------------------
+const LIGHT_CACHE = new Map(); // key -> LightSource
+
+function drawFrame(ctx, img, frameIndex, frameW, frameH){
+  ctx.clearRect(0,0,frameW,frameH);
+  ctx.drawImage(img, 0, frameIndex*frameH, frameW, frameH, 0,0,frameW,frameH);
+}
+
+function makeLightSource(sheetUrl){
+  if (LIGHT_CACHE.has(sheetUrl)) return LIGHT_CACHE.get(sheetUrl);
+
+  const frameW = 16;
+  const frameH = 16;
+
+  const canvasA = document.createElement("canvas");
+  canvasA.width = frameW;
+  canvasA.height = frameH;
+  const canvasB = document.createElement("canvas");
+  canvasB.width = frameW;
+  canvasB.height = frameH;
+
+  const ctxA = canvasA.getContext("2d");
+  const ctxB = canvasB.getContext("2d");
+
+  const texA = new THREE.CanvasTexture(canvasA);
+  const texB = new THREE.CanvasTexture(canvasB);
+  texA.magFilter = THREE.NearestFilter;
+  texA.minFilter = THREE.NearestFilter;
+  texB.magFilter = THREE.NearestFilter;
+  texB.minFilter = THREE.NearestFilter;
+
+  const mixUniform = { value: 0.0 };
+
+  // Always define faceMap arrays (no conditional scoping).
+  const faceMapA = new Array(6).fill(texA);
+  const faceMapB = new Array(6).fill(texB);
+
+  const matsVisible = new Array(6);
+  for (let i=0;i<6;i++){
+    matsVisible[i] = makeMixMaterial(faceMapA[i], faceMapB[i], mixUniform);
   }
 
-  const __LIGHT_SOURCE_CACHE = new Map();
+  const invisible = new THREE.MeshStandardMaterial({ transparent:true, opacity:0.0, depthWrite:false });
 
-  function __getLightSource(sheetUrl) {
-    const key = sheetUrl;
-    if (__LIGHT_SOURCE_CACHE.has(key)) return __LIGHT_SOURCE_CACHE.get(key);
+  const img = new Image();
+  img.decoding = "async";
+  img.src = sheetUrl;
 
-    const canvasA = document.createElement("canvas");
-    const canvasB = document.createElement("canvas");
-    canvasA.width = W; canvasA.height = H;
-    canvasB.width = W; canvasB.height = H;
+  const src = {
+    url: sheetUrl,
+    img,
+    frameW, frameH,
+    frames: 1,
+    ready: false,
+    ctxA, ctxB,
+    texA, texB,
+    faceMapA, faceMapB,
+    matsVisible,
+    invisible,
+    mixUniform,
+    _t: 0,
+    _aFrame: 0,
+    _bFrame: 1,
+  };
 
-    const ctxA = canvasA.getContext("2d");
-    const ctxB = canvasB.getContext("2d");
+  img.onload = ()=>{
+    src.frames = Math.max(1, Math.floor(img.height / frameH));
+    src._aFrame = 0;
+    src._bFrame = (src.frames>1) ? 1 : 0;
 
-    const texA = mkCanvasTex(canvasA, null);
-    const texB = mkCanvasTex(canvasB, null);
+    drawFrame(src.ctxA, img, src._aFrame, frameW, frameH);
+    drawFrame(src.ctxB, img, src._bFrame, frameW, frameH);
+    src.texA.needsUpdate = true;
+    src.texB.needsUpdate = true;
 
-    const sharedMixAlpha = { value: 0.0 };
+    src.ready = true;
+  };
+  img.onerror = (e)=>{
+    console.error("Failed to load lights sheet:", sheetUrl, e);
+    src.ready = false;
+  };
 
-    const matsVisible = [];
-    matsVisible[FACE_RIGHT]  = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
-    matsVisible[FACE_LEFT]   = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
-    matsVisible[FACE_TOP]    = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
-    matsVisible[FACE_BOTTOM] = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
-    matsVisible[FACE_FRONT]  = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
-    matsVisible[FACE_BACK]   = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
+  LIGHT_CACHE.set(sheetUrl, src);
+  return src;
+}
 
-    const faceMapA = [];
-    const faceMapB = [];
-    faceMapA[FACE_RIGHT]  = texA; faceMapB[FACE_RIGHT]  = texB;
-    faceMapA[FACE_LEFT]   = texA; faceMapB[FACE_LEFT]   = texB;
-    faceMapA[FACE_TOP]    = texA; faceMapB[FACE_TOP]    = texB;
-    faceMapA[FACE_BOTTOM] = texA; faceMapB[FACE_BOTTOM] = texB;
-    faceMapA[FACE_FRONT]  = texA; faceMapB[FACE_FRONT]  = texB;
-    faceMapA[FACE_BACK]   = texA; faceMapB[FACE_BACK]   = texB;
+function stepLightSource(src, dt, speed=1.0){
+  if (!src.ready || src.frames <= 1) return;
+  // Crossfade A -> B over 1.0s (scaled by speed). When completed, advance frames.
+  src._t += dt * speed;
+  const t = src._t;
+  const phase = t % 1.0;
+  src.mixUniform.value = phase;
 
-    const invisible = new THREE.MeshStandardMaterial({
-      transparent: true,
-      opacity: 0.0,
-      depthWrite: false,
-    });
+  if (t >= 1.0){
+    src._t = 0;
+    src._aFrame = src._bFrame;
+    src._bFrame = (src._bFrame + 1) % src.frames;
+    drawFrame(src.ctxA, src.img, src._aFrame, src.frameW, src.frameH);
+    drawFrame(src.ctxB, src.img, src._bFrame, src.frameW, src.frameH);
+    src.texA.needsUpdate = true;
+    src.texB.needsUpdate = true;
+  }
+}
 
-    const img = new Image();
-    img.decoding = "async";
-    img.src = sheetUrl;
+// -----------------------------
+// Main
+// -----------------------------
+(async function main(){
+  // Basic page setup
+  document.body.style.margin = "0";
+  document.body.style.overflow = "hidden";
+  document.body.style.background = "#000";
 
-    const source = {
-      sheetUrl,
-      img,
-      frames: 1,
-      ready: false,
-      ctxA, ctxB,
-      texA, texB,
-      matsVisible,
-      faceMapA, faceMapB,
-      invisible,
-      sharedMixAlpha,
-      rotMats: new Map(), // key: `${localFace}|${rotRadians}`
-    };
+  const dbg = makeDebugUI();
 
-    img.onload = () => {
-      source.frames = Math.max(1, Math.floor(img.height / H));
-      drawFrame(source.ctxA, img, 0);
-      source.texA.needsUpdate = true;
+  // Scene / camera / renderer
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x070707);
 
-      drawFrame(source.ctxB, img, 1 % source.frames);
-      source.texB.needsUpdate = true;
+  const camera = new THREE.PerspectiveCamera(55, window.innerWidth/window.innerHeight, 0.1, 1000);
+  camera.position.set(11, 11, 13);
 
-      source.ready = true;
-    };
+  const renderer = new THREE.WebGLRenderer({ antialias:true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  document.body.appendChild(renderer.domElement);
 
-    img.onerror = (e) => {
-      console.error("Failed to load lights sheet:", sheetUrl, e);
-      source.ready = false;
-    };
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.enablePan = false;
+  controls.target.set(0,0,0);
+  controls.update();
 
-    __LIGHT_SOURCE_CACHE.set(key, source);
-    return source;
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x101010, 0.8);
+  scene.add(hemi);
+  const dir = new THREE.DirectionalLight(0xffffff, 1.1);
+  dir.position.set(7, 10, 6);
+  scene.add(dir);
+
+  // Groups
+  const worldGroup = new THREE.Group();
+  worldGroup.name = "world";
+  scene.add(worldGroup);
+
+  // Settings (toggles)
+  let PURE_AE2 = true;        // always true in this rebuild (kept for UI compatibility)
+  let LIGHTS_ENABLED = true;
+  let ANIM_ENABLED = true;
+  let WIREFRAME = false;
+  let LABELS_ENABLED = false;
+  let MATERIAL_MODE = "ae2";  // "ae2" | "uv" | "faces"
+
+  const cbPure = dbg.mkToggle("Pure AE2", PURE_AE2, (v)=>{ PURE_AE2=v; rebuildWorld(); });
+  cbPure.disabled = true; // by design in clean rebuild; no legacy mode.
+  const cbLights = dbg.mkToggle("Lights", LIGHTS_ENABLED, (v)=>{ LIGHTS_ENABLED=v; rebuildWorld(); });
+  const cbAnim = dbg.mkToggle("Anim", ANIM_ENABLED, (v)=>{ ANIM_ENABLED=v; });
+  const cbWire = dbg.mkToggle("Wire", WIREFRAME, (v)=>{ WIREFRAME=v; rebuildWorld(); });
+  const cbLabels = dbg.mkToggle("Labels", LABELS_ENABLED, (v)=>{ LABELS_ENABLED=v; rebuildWorld(); });
+
+  dbg.mkSelect("Material", [
+    { value:"ae2", label:"AE2 textures" },
+    { value:"uv", label:"UV test" },
+    { value:"faces", label:"Face colors" },
+  ], (v)=>{ MATERIAL_MODE=v; rebuildWorld(); });
+
+  // Raycast pick
+  const raycaster = new THREE.Raycaster();
+  const mouse = new THREE.Vector2();
+  let pickInfo = null;
+  renderer.domElement.addEventListener("pointerdown", (ev)=>{
+    const rect = renderer.domElement.getBoundingClientRect();
+    mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -(((ev.clientY - rect.top) / rect.height) * 2 - 1);
+    raycaster.setFromCamera(mouse, camera);
+    const hits = raycaster.intersectObjects(worldGroup.children, true);
+    if (!hits.length){
+      pickInfo = null;
+      dbg.pickText.textContent = "Pick: none";
+      return;
+    }
+    // find top-level block group
+    let o = hits[0].object;
+    while (o && o.parent && o.parent !== worldGroup) o = o.parent;
+    if (!o || !o.userData || !o.userData.block) {
+      pickInfo = null;
+      dbg.pickText.textContent = "Pick: none";
+      return;
+    }
+    pickInfo = o.userData.block;
+    dbg.pickText.textContent = `Pick: (${pickInfo.x},${pickInfo.y},${pickInfo.z}) type=${pickInfo.type} rot=(${pickInfo.rx.toFixed(2)},${pickInfo.ry.toFixed(2)},${pickInfo.rz.toFixed(2)})`;
+    console.log("[PICK]", pickInfo);
+  });
+
+  // Texture loader with status list
+  const texLoader = new THREE.TextureLoader();
+  const texStatus = new Map(); // url -> {status, err?}
+
+  function setTexStatus(url, status, err){
+    texStatus.set(url, { status, err });
+    renderTexList();
+  }
+  function renderTexList(){
+    dbg.texList.innerHTML = "";
+    for (const [url, info] of texStatus.entries()){
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;justify-content:space-between;gap:8px";
+      const left = document.createElement("div");
+      left.textContent = url;
+      left.style.cssText = "max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:0.95";
+      const right = document.createElement("div");
+      right.textContent = info.status;
+      right.style.cssText = info.status === "ok" ? "color:#b8ffb8" : info.status === "loading" ? "color:#ffeaa7" : "color:#ff9b9b";
+      row.appendChild(left);
+      row.appendChild(right);
+      dbg.texList.appendChild(row);
+    }
   }
 
-function __numXY(x, y) {
-    const row = (GRID_SIZE - 1) - y; // y=6 => row0
-    const col = x; // x=0 => col0
-    return row * GRID_SIZE + col + 1;
-  }
-
-  function __numXZ(x, z) {
-    const row = z; // z=0 (north) => row0
-    const col = x;
-    return row * GRID_SIZE + col + 1;
-  }
-
-  function __needsLightRot90(faceIndex, x, y, z) {
-    if (z === GRID_SIZE - 1 && faceIndex === FACE_FRONT) { // south
-      return __LIGHT_ROT90.south.has(__numXY(x, y));
-    }
-    if (z === 0 && faceIndex === FACE_BACK) { // north
-      return __LIGHT_ROT90.north.has(__numXY(x, y));
-    }
-    if (y === GRID_SIZE - 1 && faceIndex === FACE_TOP) { // top
-      return __LIGHT_ROT90.top.has(__numXZ(x, z));
-    }
-    if (y === 0 && faceIndex === FACE_BOTTOM) { // bottom
-      return __LIGHT_ROT90.bottom.has(__numXZ(x, z));
-    }
-    return false;
-  }
-
-  function makeLightsLayer(sheetUrl, worldVisible, localToWorld, x, y, z) {
-    const source = __getLightSource(sheetUrl);
-
-    const mats = Array(6).fill(null);
-    for (let li = 0; li < 6; li++) {
-      const wf = localToWorld[li];
-
-      if (!worldVisible[wf]) {
-        mats[li] = source.invisible;
-        continue;
-      }
-
-      if (__needsRot90World(wf, x, y, z)) {
-        const k = `${li}|${Math.PI / 2}`;
-        if (!source.rotMats.has(k)) {
-          const mapA = source.faceMapA[li];
-          const mapB = source.faceMapB[li];
-          source.rotMats.set(k, makeCrossfadeLightMat(mapA, mapB, source.sharedMixAlpha, Math.PI / 2));
-        }
-        mats[li] = source.rotMats.get(k);
-      } else {
-        mats[li] = source.matsVisible[li];
-      }
-    }
-
-    const mesh = new THREE.Mesh(baseGeo, mats);
-    mesh.scale.setScalar(1.001);
-
-    return { source, mesh };
-  }
-
-
-  // -------------------------------
-  // Build instances
-  // -------------------------------
-  function makeInstance(x, y, z) {
-    const type0 = classifyType(x, y, z);
-    const type = type0 === "block" ? "block" : type0;
-
-    // Determine group rotation (express column direction as mesh rotation).
-    let rx = 0, ry = 0;
-    if (type === "column_z") {
-      rx = Math.PI / 2;
-    } else if (type === "column_x") {
-      rx = Math.PI / 2;
-      ry = Math.PI / 2;
-    }
-
-    const localToWorld = __FACE_LOCAL_TO_WORLD[type] || __FACE_LOCAL_TO_WORLD.block;
-    const worldVisible = __worldVisibleMask(x, y, z);
-
-    // base materials (per local face, driven by WORLD visibility/corrections)
-    const baseTex = (type === "column_x" || type === "column_y" || type === "column_z")
-      ? texColumnBase
-      : texBlockBase;
-
-    const baseMats = makeBaseMaterials(baseTex);
-    for (let li = 0; li < 6; li++) {
-      const wf = localToWorld[li];
-      if (!worldVisible[wf]) {
-        baseMats[li] = invisibleMat;
-        continue;
-      }
-      if (__needsRot90World(wf, x, y, z)) {
-        __rotateMatTexture(baseMats[li], Math.PI / 2);
-      }
-    }
-    const baseMesh = new THREE.Mesh(baseGeo, baseMats);
-
-    // lights
-    const isColumn = (type === "column_x" || type === "column_y" || type === "column_z");
-    const sheetUrl = isColumn ? LIGHT_SHEET_COLUMN_URL : LIGHT_SHEET_BLOCK_URL;
-    const lights = makeLightsLayer(sheetUrl, worldVisible, localToWorld, x, y, z);
-
-    // inside overlay (only for inside)
-    let insideMesh = null;
-    if (type === "inside") {
-      const parity = (Math.abs(x) + Math.abs(y) + Math.abs(z)) & 1;
-      const tex = parity ? texInsideA : texInsideB;
-      const mat = new THREE.MeshStandardMaterial({
-        map: tex,
-        emissiveMap: tex,
-        emissive: new THREE.Color(0xffffff),
-        emissiveIntensity: INSIDE_EMISSIVE,
+  async function loadTexture(url){
+    setTexStatus(url, "loading");
+    return await new Promise((resolve)=>{
+      texLoader.load(url, (tex)=>{
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.magFilter = THREE.NearestFilter;
+        tex.minFilter = THREE.NearestFilter;
+        setTexStatus(url, "ok");
+        resolve(tex);
+      }, undefined, (err)=>{
+        setTexStatus(url, "error", err);
+        resolve(null);
       });
-      insideMesh = new THREE.Mesh(insideGeo, mat);
-    }
-
-    const group = new THREE.Group();
-    group.add(baseMesh, lights.mesh);
-    if (insideMesh) group.add(insideMesh);
-
-    group.rotation.set(rx, ry, 0);
-    group.position.set((x * SPACING) - OFFSET, (y * SPACING) - OFFSET, (z * SPACING) - OFFSET);
-
-    return { x, y, z, type, group, lights };
+    });
   }
 
-  const instances = [];
-  for (let x = 0; x < GRID_SIZE; x++) {
-    for (let y = 0; y < GRID_SIZE; y++) {
-      for (let z = 0; z < GRID_SIZE; z++) {
-        if (!hasBlock(x, y, z)) continue;
-        const inst = makeInstance(x, y, z);
-          const layerIndex =
-    (y === 6) ? 0 :
-    (y === 5) ? 1 :
-    (y === 4) ? 2 :
-    (y === 3) ? 3 :
-    (y === 2) ? 4 :
-    (y === 1) ? 5 :
-    (y === 0) ? 6 :
-    -1;
-  if (layerIndex >= 0) layerGroups[layerIndex].add(inst.group);
-  else scene.add(inst.group);
-instances.push(inst);
-      }
+  // UV test / Face colors
+  function makeUVTestTexture(){
+    const c = document.createElement("canvas");
+    c.width = 128;
+    c.height = 128;
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "#111"; ctx.fillRect(0,0,c.width,c.height);
+    ctx.strokeStyle = "#666";
+    for (let i=0;i<=8;i++){
+      const p = i*16;
+      ctx.beginPath(); ctx.moveTo(p,0); ctx.lineTo(p,128); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0,p); ctx.lineTo(128,p); ctx.stroke();
     }
+    ctx.fillStyle = "#fff";
+    ctx.font = "14px ui-monospace,Consolas,monospace";
+    ctx.fillText("U→", 8, 20);
+    ctx.fillText("V↓", 8, 40);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.magFilter = THREE.NearestFilter;
+    tex.minFilter = THREE.NearestFilter;
+    return tex;
   }
 
-  // -------------------------------
-  // Debug: world compass labels inside the 3D scene (北/東/南/西)
-  // -------------------------------
-  function makeCompassSprite(label) {
-    const size = 128;
-    const canvas = document.createElement("canvas");
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext("2d");
+  const uvTestTex = makeUVTestTexture();
+  const faceColorTex = (()=> {
+    // not needed; we'll use per-face solid materials
+    return null;
+  })();
 
-    // background
-    ctx.clearRect(0, 0, size, size);
-    ctx.beginPath();
-    ctx.arc(size / 2, size / 2, size * 0.46, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(0,0,0,0.45)";
-    ctx.fill();
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = "rgba(255,255,255,0.65)";
-    ctx.stroke();
+  // Load base textures
+  const [texBlock, texColumn, texInsideA, texInsideB] = await Promise.all([
+    loadTexture(TEX.block),
+    loadTexture(TEX.column),
+    loadTexture(TEX.inside_a),
+    loadTexture(TEX.inside_b),
+  ]);
 
-    // text
-    ctx.fillStyle = "rgba(255,255,255,0.95)";
-    ctx.font = "800 56px system-ui, -apple-system, Segoe UI, sans-serif";
+  // Lights (sprite sheets) - loaded via Image, still show status.
+  function preflightImage(url){
+    setTexStatus(url, "loading");
+    return new Promise((resolve)=>{
+      const img = new Image();
+      img.decoding = "async";
+      img.onload = ()=> { setTexStatus(url, "ok"); resolve(true); };
+      img.onerror = ()=> { setTexStatus(url, "error"); resolve(false); };
+      img.src = url;
+    });
+  }
+  await Promise.all([
+    preflightImage(TEX.block_l),
+    preflightImage(TEX.column_l),
+    preflightImage(TEX.inside_a_l),
+    preflightImage(TEX.inside_b_l),
+  ]);
+
+  // Shared geometry
+  const geom = makeMCBoxGeometry(1.0);
+
+  // Base materials (created from loaded textures)
+  function baseMaterialFromTexture(tex){
+    if (!tex) {
+      // fallback to obvious error material
+      return new THREE.MeshStandardMaterial({ color: 0xff00ff, roughness:0.8, metalness:0.0, wireframe:WIREFRAME });
+    }
+    return new THREE.MeshStandardMaterial({ map: tex, roughness:0.9, metalness:0.0, wireframe:WIREFRAME });
+  }
+
+  const invisibleMat = new THREE.MeshStandardMaterial({ transparent:true, opacity:0.0, depthWrite:false });
+
+  // Labels
+  function makeLabel(text){
+    const c = document.createElement("canvas");
+    c.width = 128;
+    c.height = 128;
+    const ctx = c.getContext("2d");
+    ctx.clearRect(0,0,128,128);
+    ctx.fillStyle = "rgba(0,0,0,0.5)";
+    ctx.fillRect(0,0,128,128);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 48px ui-sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(label, size / 2, size / 2 + 2);
-
-    const tex = new THREE.CanvasTexture(canvas);
+    ctx.fillText(text, 64, 64);
+    const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
-    tex.needsUpdate = true;
-
-    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
-    mat.depthTest = false;   // keep readable even if behind blocks
-    mat.depthWrite = false;
-
-    const spr = new THREE.Sprite(mat);
-    spr.renderOrder = 9999;
-    spr.scale.set(0.9, 0.9, 0.9);
-    return spr;
+    tex.magFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearFilter;
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent:true });
+    const sp = new THREE.Sprite(mat);
+    sp.scale.set(0.8,0.8,0.8);
+    return sp;
   }
 
-  function addWorldCompassLabels() {
-    if (!instances.length) return;
+  // Build placed set once
+  const placed = buildPlacedSet();
 
-    // clear existing labels (idempotent)
-    while (compassGroup.children.length) compassGroup.remove(compassGroup.children[0]);
+  // Light sources per type
+  const lightSrcByType = {
+    block:     makeLightSource(TEX.block_l),
+    column:    makeLightSource(TEX.column_l),
+    inside_a:  makeLightSource(TEX.inside_a_l),
+    inside_b:  makeLightSource(TEX.inside_b_l),
+  };
 
-    const box = new THREE.Box3();
-    for (const inst of instances) box.expandByObject(inst.group);
-
-    const center = box.getCenter(new THREE.Vector3());
-    const size = box.getSize(new THREE.Vector3());
-    const margin = Math.max(size.x, size.z) * 0.20 + 0.35;
-
-    const north = makeCompassSprite("北"); // -Z
-    const south = makeCompassSprite("南"); // +Z
-    const west  = makeCompassSprite("西"); // -X
-    const east  = makeCompassSprite("東"); // +X
-
-    // place at mid-height, outside each side
-    const y = center.y;
-
-    north.position.set(center.x, y, box.min.z - margin);
-    south.position.set(center.x, y, box.max.z + margin);
-    west.position.set(box.min.x - margin, y, center.z);
-    east.position.set(box.max.x + margin, y, center.z);
-
-    compassGroup.add(north, south, west, east);
-  }
-
-  addWorldCompassLabels();
-
-  // -------------------------------
-  // UI: Layer visibility + Compass toggle
-  // -------------------------------
-
-  function createVisibilityPanel() {
-    const panel = document.createElement("div");
-    panel.id = "visibility-panel";
-    panel.style.cssText = [
-      "position:fixed",
-      "right:12px",
-      "top:12px",
-      "z-index:10000",
-      "padding:10px 12px",
-      "border-radius:12px",
-      "background:rgba(0,0,0,.55)",
-      "color:#fff",
-      "font:12px/1.3 system-ui,-apple-system,Segoe UI,sans-serif",
-      "backdrop-filter: blur(4px)",
-      "pointer-events:auto",
-      "user-select:none",
-      "max-width:220px"
-    ].join(";");
-
-    const title = document.createElement("div");
-    title.textContent = "表示切替";
-    title.style.cssText = "font-weight:700;margin-bottom:8px;";
-    panel.appendChild(title);
-
-    const mkRow = (labelText, checked, onChange) => {
-      const row = document.createElement("label");
-      row.style.cssText = "display:flex;align-items:center;gap:8px;margin:6px 0;cursor:pointer;";
-
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.checked = checked;
-      cb.addEventListener("change", () => onChange(cb.checked));
-
-      const txt = document.createElement("span");
-      txt.textContent = labelText;
-
-      row.appendChild(cb);
-      row.appendChild(txt);
-      return row;
-    };
-
-    // Layers 1..7
-    for (let i = 0; i < 7; i++) {
-      const initial = true;
-      layerGroups[i].visible = initial;
-      panel.appendChild(
-        mkRow(`Layer ${i + 1}`, initial, (v) => (layerGroups[i].visible = v))
-      );
-    }
-    // Animate (pause lights animation without hiding)
-    panel.appendChild(
-      mkRow("Animate", true, (v) => {
-        ANIM_ENABLED = v;
-        // Reset time accumulator so re-enabling does not "jump"
-        if (v) last = performance.now();
-        __requestRender();})
-    );
-
-
-
-    // Lights
-    panel.appendChild(
-      mkRow("Lights", true, (v) => {
-        LIGHTS_ENABLED = v;
-        __requestRender();
-        for (const inst of instances) {
-          if (!inst.lights || !LIGHTS_ENABLED) continue;
-          inst.lights.mesh.visible = v;
+  // World rebuild
+  function clearGroup(g){
+    while (g.children.length){
+      const c = g.children.pop();
+      c.traverse((o)=>{
+        if (o.geometry) o.geometry.dispose?.();
+        if (o.material){
+          if (Array.isArray(o.material)) o.material.forEach(m=>m.dispose?.());
+          else o.material.dispose?.();
         }
-      })
-    );
-
-    // Lights FPS
-    const fpsRow = document.createElement("div");
-    fpsRow.style.cssText = "display:flex;gap:8px;margin:6px 0;align-items:center;";
-    const fpsLabel = document.createElement("span");
-    fpsLabel.textContent = "Lights FPS";
-    const fpsValue = document.createElement("span");
-    fpsValue.textContent = String(LIGHTS_FPS);
-    fpsValue.style.cssText = "opacity:.9;";
-    fpsLabel.style.cssText = "opacity:.85;min-width:70px;";
-    const mkFpsBtn = (v) => {
-      const b = document.createElement("button");
-      b.textContent = String(v);
-      b.style.cssText = "padding:6px 8px;border-radius:10px;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);color:#fff;cursor:pointer;";
-      b.addEventListener("click", () => { LIGHTS_FPS = v; fpsValue.textContent = String(v);
-        __requestRender(); });
-      return b;
-    };
-    fpsRow.appendChild(fpsLabel);
-    fpsRow.appendChild(fpsValue);
-    fpsRow.appendChild(mkFpsBtn(3));
-    fpsRow.appendChild(mkFpsBtn(6));
-    fpsRow.appendChild(mkFpsBtn(12));
-    panel.appendChild(fpsRow);
-
-    // Separator
-    const hr = document.createElement("hr");
-    hr.style.cssText = "border:none;border-top:1px solid rgba(255,255,255,.18);margin:10px 0;";
-    panel.appendChild(hr);
-
-    // Compass
-    compassGroup.visible = true;
-    panel.appendChild(
-      mkRow("Compass", true, (v) => (compassGroup.visible = v))
-    );
-
-    // Reset view
-    const btn = document.createElement("button");
-    btn.textContent = "Reset View";
-    btn.style.cssText = [
-      "margin-top:10px",
-      "width:100%",
-      "padding:8px 10px",
-      "border-radius:10px",
-      "border:1px solid rgba(255,255,255,.22)",
-      "background:rgba(255,255,255,.08)",
-      "color:#fff",
-      "cursor:pointer"
-    ].join(";");
-    btn.addEventListener("click", () => {
-      camera.position.set(11.0, 11.0, 13.5);
-      controls.target.set(0, 0, 0);
-      controls.update();
-    });
-    panel.appendChild(btn);
-
-    document.body.appendChild(panel);
+      });
+    }
   }
 
-  createVisibilityPanel();
-
-  // -------------------------------
-  // Animate lights
-  // -------------------------------
-  let t = 0;
-  let frameA = 0;
-  let frameB = 1;
-
-  function smoothstep(x) {
-    return x * x * (3 - 2 * x);
+  function typeToBaseTexture(type){
+    if (type === "column_x" || type === "column_y" || type === "column_z") return texColumn;
+    if (type === "inside_a") return texInsideA;
+    if (type === "inside_b") return texInsideB;
+    return texBlock;
   }
 
-  function updateLights(dt) {
-    t += dt;
+  function typeToLightSource(type){
+    if (type === "column_x" || type === "column_y" || type === "column_z") return lightSrcByType.column;
+    if (type === "inside_a") return lightSrcByType.inside_a;
+    if (type === "inside_b") return lightSrcByType.inside_b;
+    return lightSrcByType.block;
+  }
 
-    if (!LIGHTS_ENABLED) return;
-    const cycleSeconds = 1 / Math.max(1, LIGHTS_FPS);
-    const phase = (t % cycleSeconds) / cycleSeconds;
-    const alpha = smoothstep(phase);
+  function makeFaceColorMats(){
+    const mk = (c)=> new THREE.MeshStandardMaterial({ color:c, roughness:0.85, metalness:0.0, wireframe:WIREFRAME });
+    const m = new Array(6);
+    m[FACE_RIGHT] = mk(0xff5555);
+    m[FACE_LEFT]  = mk(0x55ff55);
+    m[FACE_TOP]   = mk(0x5555ff);
+    m[FACE_BOTTOM]= mk(0xffff55);
+    m[FACE_FRONT] = mk(0xff55ff);
+    m[FACE_BACK]  = mk(0x55ffff);
+    return m;
+  }
 
-    // advance frames at cycle boundary
-    if (phase < (dt / cycleSeconds)) {
-      frameA++;
-      frameB = frameA + 1;
-
-      // Update each unique light source once (A+B)
-      for (const src of __LIGHT_SOURCE_CACHE.values()) {
-        if (!src.ready) continue;
-        const a = frameA % src.frames;
-        const b = frameB % src.frames;
-
-        drawFrame(src.ctxA, src.img, a);
-        src.texA.needsUpdate = true;
-
-        drawFrame(src.ctxB, src.img, b);
-        src.texB.needsUpdate = true;
+  function buildMaterialsForBlock(x,y,z,type){
+    // Base: 6 materials, default same; apply special rot90 by cloning texture.
+    let baseMats;
+    if (MATERIAL_MODE === "uv"){
+      const mat = baseMaterialFromTexture(uvTestTex);
+      baseMats = new Array(6).fill(mat);
+    } else if (MATERIAL_MODE === "faces"){
+      baseMats = makeFaceColorMats();
+    } else {
+      const baseTex = typeToBaseTexture(type);
+      // For special rot90, create per-face material only when needed; otherwise share one.
+      const sharedMat = baseMaterialFromTexture(baseTex);
+      baseMats = new Array(6).fill(sharedMat);
+      for (let f=0; f<6; f++){
+        if (!needsRot90ForFace(x,y,z,f)) continue;
+        if (!baseTex) continue;
+        const t = rotateTexture90(baseTex);
+        baseMats[f] = baseMaterialFromTexture(t);
       }
     }
 
-    // apply crossfade alpha (shared uniform per source)
-    for (const src of __LIGHT_SOURCE_CACHE.values()) {
-      src.sharedMixAlpha.value = (src.ready ? alpha : 0.0);
+    // Lights: 6 materials, default from light source; apply special rot90 by rotating BOTH texA/texB (via clone) per face.
+    let lightMats = null;
+    if (LIGHTS_ENABLED && MATERIAL_MODE === "ae2"){
+      const src = typeToLightSource(type);
+      // Use src mats but clone and apply rot90 when needed.
+      lightMats = new Array(6);
+      for (let f=0; f<6; f++){
+        // if face should be invisible (interior), we still draw but it's ok; for now we always show as in AE2 demo.
+        if (!needsRot90ForFace(x,y,z,f)){
+          lightMats[f] = src.matsVisible[f];
+        } else {
+          // Create a one-off mixed mat with rotated textures, sharing mix uniform.
+          const tA = rotateTexture90(src.faceMapA[f]);
+          const tB = rotateTexture90(src.faceMapB[f]);
+          const m = makeMixMaterial(tA, tB, src.mixUniform);
+          lightMats[f] = m;
+        }
+        lightMats[f].wireframe = WIREFRAME;
+      }
+    }
+    return { baseMats, lightMats };
+  }
+
+  function applyBlockRotation(group, type){
+    // Column direction by mesh rotation only
+    group.rotation.set(0,0,0);
+    if (type === "column_y") return;
+    if (type === "column_z"){
+      group.rotation.x = ROT_90;
+      return;
+    }
+    if (type === "column_x"){
+      group.rotation.x = ROT_90;
+      group.rotation.y = ROT_90;
+      return;
     }
   }
 
-  // -------------------------------
-  // Render loop
-  // -------------------------------
-  let __needsRender = true;
-  const __requestRender = () => { __needsRender = true; };
-  let last = performance.now();
-  function animate() {
-    requestAnimationFrame(animate);
-    const now = performance.now();
-    const dt = (now - last) / 1000;
-    last = now;
+  function rebuildWorld(){
+    clearGroup(worldGroup);
 
+    const faceMatsCache = null; // not used; per block computed
+    for (let y=0; y<GRID; y++){
+      for (let z=0; z<GRID; z++){
+        for (let x=0; x<GRID; x++){
+          if (!placed.has(posKey(x,y,z))) continue;
+
+          const type = classifyType(x,y,z, placed);
+
+          const g = new THREE.Group();
+          g.position.set((x*SPACING)-OFFSET, (y*SPACING)-OFFSET, (z*SPACING)-OFFSET);
+          applyBlockRotation(g, type);
+
+          const { baseMats, lightMats } = buildMaterialsForBlock(x,y,z,type);
+
+          const baseMesh = new THREE.Mesh(geom, baseMats);
+          g.add(baseMesh);
+
+          if (LIGHTS_ENABLED && lightMats){
+            // Slightly larger to prevent z-fighting
+            const lightGeom = geom.clone();
+            const lightMesh = new THREE.Mesh(lightGeom, lightMats);
+            lightMesh.scale.set(1.002, 1.002, 1.002);
+            g.add(lightMesh);
+          }
+
+          if (LABELS_ENABLED){
+            const sp = makeLabel(`${x},${y},${z}`);
+            sp.position.set(0, 0.7, 0);
+            g.add(sp);
+          }
+
+          g.userData.block = {
+            x,y,z,type,
+            rx: g.rotation.x, ry: g.rotation.y, rz: g.rotation.z,
+          };
+
+          worldGroup.add(g);
+        }
+      }
+    }
+  }
+
+  rebuildWorld();
+
+  // Resize
+  window.addEventListener("resize", ()=>{
+    camera.aspect = window.innerWidth/window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  // Animation loop
+  let last = safeNowMs();
+  function tick(){
+    requestAnimationFrame(tick);
     controls.update();
 
-    if (ANIM_ENABLED) {
-      updateLights(dt);
-      renderer.render(scene, camera);
-    } else {
-      // When animation is paused, only render when something changed.
-      if (__needsRender) {
-        renderer.render(scene, camera);
-        __needsRender = false;
-      }
-    }
-  }
-  animate();
+    const now = safeNowMs();
+    const dt = clamp((now - last) / 1000, 0, 0.05);
+    last = now;
 
-  addEventListener("resize", () => {
-    camera.aspect = innerWidth / innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(innerWidth, innerHeight);
-  });
-} catch (e) {
-  fatal(e);
-}
+    if (ANIM_ENABLED && LIGHTS_ENABLED){
+      // advance all light sheets
+      stepLightSource(lightSrcByType.block, dt, 1.0);
+      stepLightSource(lightSrcByType.column, dt, 1.0);
+      stepLightSource(lightSrcByType.inside_a, dt, 1.0);
+      stepLightSource(lightSrcByType.inside_b, dt, 1.0);
+    }
+    renderer.render(scene, camera);
+  }
+  tick();
+})().catch((e)=>{
+  console.error(e);
+  const pre = document.createElement("pre");
+  pre.style.cssText = "position:fixed;inset:0;background:#000;color:#ffb4b4;white-space:pre-wrap;padding:12px;margin:0;z-index:99999;overflow:auto;font:12px/1.4 ui-monospace,Consolas,monospace";
+  pre.textContent = String(e?.stack || e);
+  document.body.appendChild(pre);
+});
