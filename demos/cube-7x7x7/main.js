@@ -603,8 +603,8 @@ function __numXY(x, y) {
 
     // base materials (per local face, driven by WORLD visibility/corrections)
     const baseTex = (type === "column_x" || type === "column_y" || type === "column_z")
-      ? texColumn
-      : texBlock;
+      ? texColumnBase
+      : texBlockBase;
 
     const baseMats = makeBaseMaterials(baseTex);
     for (let li = 0; li < 6; li++) {
