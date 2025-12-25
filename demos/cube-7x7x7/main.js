@@ -543,12 +543,35 @@ function stepLightSource(src, dt, speed=1.0){
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.addEventListener("change", () => { requestRender(); });
   // --- Wheel zoom tuning (mouse wheel) ---
-  controls.zoomSpeed = 0.25;
+  // The default OrbitControls wheel zoom can be finicky on some trackpads; use a
+  // deterministic fine-grained dolly instead.
+  controls.enableZoom = false;
+  controls.zoomSpeed = 0.25; // kept for completeness (unused when enableZoom=false)
   controls.minDistance = 4;
   controls.maxDistance = 180;
 
-  // Prevent page scroll while the pointer is over the canvas.
-  renderer.domElement.addEventListener("wheel", (e) => { e.preventDefault(); }, { passive: false });
+  // Ensure OrbitControls receives wheel / touch gestures consistently.
+  renderer.domElement.style.touchAction = "none";
+  if ("zoomToCursor" in controls) controls.zoomToCursor = true;
+
+  // Fine-grained zoom (trackpad/mouse wheel). This also prevents page scrolling.
+  const __zoomBase = 1.00025; // smaller = finer zoom
+  renderer.domElement.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const dy = e.deltaY;
+    if (!dy) return;
+    const mag = Math.min(240, Math.abs(dy));
+    const factor = Math.pow(__zoomBase, mag);
+    const v = new THREE.Vector3().copy(camera.position).sub(controls.target);
+    if (dy > 0) v.multiplyScalar(factor); else v.multiplyScalar(1 / factor);
+    // Clamp to min/max distance
+    const len = v.length();
+    if (len < controls.minDistance) v.setLength(controls.minDistance);
+    if (len > controls.maxDistance) v.setLength(controls.maxDistance);
+    camera.position.copy(controls.target).add(v);
+    controls.update();
+    requestRender();
+  }, { passive: false });
 
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
@@ -599,22 +622,22 @@ function stepLightSource(src, dt, speed=1.0){
     mouse.y = -(((ev.clientY - rect.top) / rect.height) * 2 - 1);
     raycaster.setFromCamera(mouse, camera);
     const hits = raycaster.intersectObjects(worldGroup.children, true);
-    if (!hits.length){
+    const hit = hits.find(h => h && h.object && h.object.isInstancedMesh && h.instanceId != null && h.object.userData && h.object.userData.instanceMeta);
+    if (!hit){
       pickInfo = null;
       dbg.pickText.textContent = "Pick: none";
       return;
     }
-    // find top-level block group
-    let o = hits[0].object;
-    while (o && o.parent && o.parent !== worldGroup) o = o.parent;
-    if (!o || !o.userData || !o.userData.block) {
+    const meta = hit.object.userData.instanceMeta[hit.instanceId];
+    if (!meta){
       pickInfo = null;
       dbg.pickText.textContent = "Pick: none";
       return;
     }
-    pickInfo = o.userData.block;
-    dbg.pickText.textContent = `Pick: (${pickInfo.x},${pickInfo.y},${pickInfo.z}) type=${pickInfo.type} rot=(${pickInfo.rx.toFixed(2)},${pickInfo.ry.toFixed(2)},${pickInfo.rz.toFixed(2)})`;
-    console.log("[PICK]", pickInfo);
+    pickInfo = meta;
+    const wd = meta.worldDir ? ` worldDir=(${meta.worldDir[0]},${meta.worldDir[1]},${meta.worldDir[2]})` : "";
+    dbg.pickText.textContent = `Pick: (${meta.x},${meta.y},${meta.z}) type=${meta.type} localFace=${meta.face}${wd} rot=(${meta.rx.toFixed(2)},${meta.ry.toFixed(2)},${meta.rz.toFixed(2)})`;
+    console.log("[PICK]", meta);
   });
 
   // Texture loader with status list
@@ -714,8 +737,53 @@ function stepLightSource(src, dt, speed=1.0){
     preflightImage(TEX.inside_b_l),
   ]);
 
-  // Shared geometry
-  const geom = makeMCBoxGeometry(1.0);
+  // -----------------------------
+  // Shared geometry (PERF): render ONLY visible faces using InstancedMesh
+  // -----------------------------
+  // Front face plane matching makeMCBoxGeometry's FACE_FRONT vertex order + UV.
+  function makeMCFacePlaneGeometry(size=1.0, zOffset=0.5){
+    const s = size * 0.5;
+    const pos = [
+      -s, -s,  zOffset,
+       s, -s,  zOffset,
+       s,  s,  zOffset,
+      -s,  s,  zOffset,
+    ];
+    const nrm = [0,0,1, 0,0,1, 0,0,1, 0,0,1];
+    const uv  = [0,0, 1,0, 1,1, 0,1];
+    const idx = [0,1,2, 0,2,3];
+    const g = new THREE.BufferGeometry();
+    g.setIndex(idx);
+    g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute("normal", new THREE.Float32BufferAttribute(nrm, 3));
+    g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+    g.computeBoundingSphere();
+    return g;
+  }
+
+  // Visible surface geometry: base + a slightly offset copy for additive lights.
+  const faceGeom = makeMCFacePlaneGeometry(1.0, 0.5);
+  const faceGeomLight = makeMCFacePlaneGeometry(1.0, 0.501);
+
+  // Local face orientation matrices (from a +Z plane).
+  const __faceRotEuler = [
+    new THREE.Euler(0, ROT_90, 0),           // RIGHT  (+X)
+    new THREE.Euler(0, -ROT_90, 0),          // LEFT   (-X)
+    new THREE.Euler(-ROT_90, 0, 0),          // TOP    (+Y)
+    new THREE.Euler(ROT_90, 0, 0),           // BOTTOM (-Y)
+    new THREE.Euler(0, 0, 0),                // FRONT  (+Z)
+    new THREE.Euler(0, Math.PI, 0),          // BACK   (-Z)
+  ];
+
+  // Pre-baked face transforms (rotation * translate(+Z 0.5)).
+  const __faceMat = new Array(6);
+  const __tmpQ = new THREE.Quaternion();
+  for (let f=0; f<6; f++){
+    const r = __faceRotEuler[f];
+    __tmpQ.setFromEuler(r);
+    // Translation is already embedded in the face geometry's zOffset.
+    __faceMat[f] = new THREE.Matrix4().makeRotationFromQuaternion(__tmpQ);
+  }
 
   // Base materials (created from loaded textures)
   function baseMaterialFromTexture(tex){
@@ -858,54 +926,178 @@ function stepLightSource(src, dt, speed=1.0){
     }
   }
 
+  // Rebuild stats for quick sanity checks.
+  let __lastWorldStats = { blocks: 0, faces: 0, meshes: 0 };
+
   function rebuildWorld(){
-    const __t0 = safeNowMs();
     clearGroup(worldGroup);
 
-    const faceMatsCache = null; // not used; per block computed
+    // -----------------------------
+    // Materials cache per rebuild
+    // -----------------------------
+    const __rotTexCache = new WeakMap();
+    const __baseMatCache = new Map();
+    const __lightMatCache = new Map();
+    const __uvMat = baseMaterialFromTexture(uvTestTex);
+    __uvMat.wireframe = WIREFRAME;
+    const __faceColorMats = (MATERIAL_MODE === "faces") ? makeFaceColorMats() : null;
+
+    function __getRotTex(tex){
+      if (!tex) return tex;
+      if (__rotTexCache.has(tex)) return __rotTexCache.get(tex);
+      const t = rotateTexture90(tex);
+      __rotTexCache.set(tex, t);
+      return t;
+    }
+
+    function __baseMatFor(type, faceIndex, rot90){
+      if (MATERIAL_MODE === "uv") return __uvMat;
+      if (MATERIAL_MODE === "faces") return __faceColorMats[faceIndex];
+
+      const baseTex = typeToBaseTexture(type);
+      const useTex = rot90 ? __getRotTex(baseTex) : baseTex;
+      const key = `ae2|${type}|${rot90?"r":"n"}|${useTex?useTex.uuid:"null"}|wf=${WIREFRAME}`;
+      if (__baseMatCache.has(key)) return __baseMatCache.get(key);
+      const mat = baseMaterialFromTexture(useTex);
+      __baseMatCache.set(key, mat);
+      return mat;
+    }
+
+    function __lightMatFor(type, rot90){
+      if (!(LIGHTS_ENABLED && MATERIAL_MODE === "ae2")) return null;
+      const src = typeToLightSource(type);
+      const key = `${src.url}|${rot90?"r":"n"}|wf=${WIREFRAME}`;
+      if (__lightMatCache.has(key)) return __lightMatCache.get(key);
+
+      // In this demo, the light sheets are the same for all faces (faceMapA/B are filled with texA/texB),
+      // so we can use a single mix material per type (+ optional rot90).
+      let tA = src.texA;
+      let tB = src.texB;
+      if (rot90){
+        tA = __getRotTex(tA);
+        tB = __getRotTex(tB);
+      }
+      const mat = makeMixMaterial(tA, tB, src.mixUniform);
+      mat.wireframe = WIREFRAME;
+      __lightMatCache.set(key, mat);
+      return mat;
+    }
+
+    // -----------------------------
+    // Instancing groups
+    // -----------------------------
+    const groups = new Map(); // key -> { geom, mat, matrices: Matrix4[], meta: any[] }
+    function __push(groupKey, geom, mat, matrix, meta){
+      let g = groups.get(groupKey);
+      if (!g){
+        g = { geom, mat, matrices: [], meta: [] };
+        groups.set(groupKey, g);
+      }
+      g.matrices.push(matrix);
+      g.meta.push(meta);
+    }
+
+    // Local normals in face-index order
+    const __localNormals = [
+      new THREE.Vector3( 1, 0, 0),
+      new THREE.Vector3(-1, 0, 0),
+      new THREE.Vector3( 0, 1, 0),
+      new THREE.Vector3( 0,-1, 0),
+      new THREE.Vector3( 0, 0, 1),
+      new THREE.Vector3( 0, 0,-1),
+    ];
+
+    function __dirFromNormal(n){
+      const ax = Math.abs(n.x), ay = Math.abs(n.y), az = Math.abs(n.z);
+      if (ax > 0.5) return [n.x > 0 ? 1 : -1, 0, 0];
+      if (ay > 0.5) return [0, n.y > 0 ? 1 : -1, 0];
+      return [0, 0, n.z > 0 ? 1 : -1];
+    }
+
+    function __blockEuler(type){
+      // Same as applyBlockRotation, but returned as Euler for math.
+      if (type === "column_z") return new THREE.Euler(ROT_90, 0, 0);
+      if (type === "column_x") return new THREE.Euler(ROT_90, ROT_90, 0);
+      return new THREE.Euler(0, 0, 0); // block, inside_*, column_y
+    }
+
+    const __one = new THREE.Vector3(1,1,1);
+    const __pos = new THREE.Vector3();
+    const __quat = new THREE.Quaternion();
+    const __mBlock = new THREE.Matrix4();
+    const __m = new THREE.Matrix4();
+    const __worldN = new THREE.Vector3();
+
+    const blocksCount = placed.size;
+    let facesCount = 0;
+
     for (let y=0; y<GRID; y++){
       for (let z=0; z<GRID; z++){
         for (let x=0; x<GRID; x++){
           if (!placed.has(posKey(x,y,z))) continue;
 
           const type = classifyType(x,y,z, placed);
+          const e = __blockEuler(type);
+          __quat.setFromEuler(e);
+          __pos.set((x*SPACING)-OFFSET, (y*SPACING)-OFFSET, (z*SPACING)-OFFSET);
+          __mBlock.compose(__pos, __quat, __one);
 
-          const g = new THREE.Group();
-          g.position.set((x*SPACING)-OFFSET, (y*SPACING)-OFFSET, (z*SPACING)-OFFSET);
-          applyBlockRotation(g, type);
-
-          const { baseMats, lightMats } = buildMaterialsForBlock(x,y,z,type);
-
-          const baseMesh = new THREE.Mesh(geom, baseMats);
-          g.add(baseMesh);
-
-          if (LIGHTS_ENABLED && lightMats){
-            // Slightly larger to prevent z-fighting
-            const lightMesh = new THREE.Mesh(geom, lightMats);
-            lightMesh.scale.set(1.002, 1.002, 1.002);
-            g.add(lightMesh);
-          }
-
+          // Optional labels (debug) - keep identical behavior, but only when enabled.
           if (LABELS_ENABLED){
             const sp = makeLabel(`${x},${y},${z}`);
-            sp.position.set(0, 0.7, 0);
-            g.add(sp);
+            sp.position.copy(__pos).add(new THREE.Vector3(0, 0.7, 0));
+            worldGroup.add(sp);
           }
 
-          g.userData.block = {
-            x,y,z,type,
-            rx: g.rotation.x, ry: g.rotation.y, rz: g.rotation.z,
-          };
+          for (let f=0; f<6; f++){
+            // Determine which WORLD direction this LOCAL face points to after block rotation,
+            // then cull faces that are adjacent to another block in that direction.
+            __worldN.copy(__localNormals[f]).applyEuler(e);
+            const dir = __dirFromNormal(__worldN);
+            const nx = x + dir[0];
+            const ny = y + dir[1];
+            const nz = z + dir[2];
+            const neighborInside = (nx >= 0 && nx < GRID && ny >= 0 && ny < GRID && nz >= 0 && nz < GRID) && placed.has(posKey(nx,ny,nz));
+            if (neighborInside) continue;
 
-          worldGroup.add(g);
+            const rot90 = needsRot90ForFace(x,y,z,f);
+            const baseMat = __baseMatFor(type, f, rot90);
+            __m.copy(__mBlock).multiply(__faceMat[f]);
+            __push(`B|${baseMat.uuid}`, faceGeom, baseMat, __m.clone(), { x,y,z,type, face:f, rx:e.x, ry:e.y, rz:e.z, worldDir:dir });
+            facesCount++;
+
+            const lightMat = __lightMatFor(type, rot90);
+            if (lightMat){
+              // Same transform; geometry is slightly offset to prevent z-fighting.
+              __push(`L|${lightMat.uuid}`, faceGeomLight, lightMat, __m.clone(), { x,y,z,type, face:f, rx:e.x, ry:e.y, rz:e.z, worldDir:dir });
+            }
+          }
         }
       }
     }
+
+    // Build instanced meshes
+    for (const g of groups.values()){
+      const count = g.matrices.length;
+      if (!count) continue;
+      const inst = new THREE.InstancedMesh(g.geom, g.mat, count);
+      // Safer for small demos: avoid bounding-sphere issues with instancing.
+      inst.frustumCulled = false;
+      inst.userData.instanceMeta = g.meta;
+      for (let i=0; i<count; i++) inst.setMatrixAt(i, g.matrices[i]);
+      inst.instanceMatrix.needsUpdate = true;
+      worldGroup.add(inst);
+    }
+
+    __lastWorldStats = { blocks: blocksCount, faces: facesCount, meshes: worldGroup.children.length };
+    requestRender();
   }
 
   rebuildWorld();
   // show block count immediately
-  try { dbg.pickText.textContent = `Pick: none (blocks=${worldGroup.children.length})`; } catch(e) {}
+  try {
+    dbg.pickText.textContent = `Pick: none (blocks=${__lastWorldStats.blocks}, visibleFaces=${__lastWorldStats.faces}, meshes=${__lastWorldStats.meshes})`;
+  } catch(e) {}
   // ---- DevTools exposure (module scope -> window) ----
   // This is required because ES modules do not create global variables; without this, `scene` / `rebuildWorld`
   // are `undefined` in the console. Expose minimal handles for fact-based debugging.
