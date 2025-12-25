@@ -258,36 +258,57 @@ function makeMCBoxGeometry(size=1.0){
   const normals = [];
   const uvs = [];
   const indices = [];
+  const groups = []; // [{start,count,materialIndex}]
   let vbase = 0;
 
-  function addFace(p0,p1,p2,p3, n){
+  function addFace(p0,p1,p2,p3, n, materialIndex){
     // p0..p3 are corners in CCW order when looking at the face from outside
     positions.push(...p0, ...p1, ...p2, ...p3);
     normals.push(...n, ...n, ...n, ...n);
-    // UV: (0,0) at p0, (1,0) at p1, (1,1) at p2, (0,1) at p3
+
+    // UV: p0 (0,0), p1 (1,0), p2 (1,1), p3 (0,1)
     uvs.push(0,0, 1,0, 1,1, 0,1);
-    indices.push(vbase, vbase+1, vbase+2, vbase, vbase+2, vbase+3);
+
+    // two triangles: 0-1-2 and 0-2-3
+    const i0 = vbase + 0;
+    const i1 = vbase + 1;
+    const i2 = vbase + 2;
+    const i3 = vbase + 3;
+
+    const start = indices.length;
+    indices.push(i0,i1,i2,  i0,i2,i3);
+    groups.push({ start, count: 6, materialIndex });
+
     vbase += 4;
   }
 
-  // +X (right): looking from +X toward origin, up=+Y, right=+Z
-  addFace([ s,-s,-s],[ s,-s, s],[ s, s, s],[ s, s,-s],[1,0,0]);
-  // -X (left): looking from -X, up=+Y, right=-Z
-  addFace([-s,-s, s],[-s,-s,-s],[-s, s,-s],[-s, s, s],[-1,0,0]);
-  // +Y (top): looking from +Y, up=-Z, right=+X (so north is "up" on texture)
-  addFace([-s, s, s],[ s, s, s],[ s, s,-s],[-s, s,-s],[0,1,0]);
+  // Face order matches FACE_* indices used elsewhere:
+  // FACE_RIGHT(+X)=0, FACE_LEFT(-X)=1, FACE_TOP(+Y)=2, FACE_BOTTOM(-Y)=3, FACE_FRONT(+Z)=4, FACE_BACK(-Z)=5
+
+  // +X (east/right): looking from +X, up=+Y, right=-Z
+  addFace([ s,-s, s],[ s,-s,-s],[ s, s,-s],[ s, s, s],[1,0,0], FACE_RIGHT);
+  // -X (west/left): looking from -X, up=+Y, right=+Z
+  addFace([-s,-s,-s],[-s,-s, s],[-s, s, s],[-s, s,-s],[-1,0,0], FACE_LEFT);
+  // +Y (top): looking from +Y, up=-Z, right=+X
+  addFace([-s, s, s],[ s, s, s],[ s, s,-s],[-s, s,-s],[0,1,0], FACE_TOP);
   // -Y (bottom): looking from -Y, up=+Z, right=+X
-  addFace([-s,-s,-s],[ s,-s,-s],[ s,-s, s],[-s,-s, s],[0,-1,0]);
-  // +Z (front/south): looking from +Z, up=+Y, right=-X? (keep U to +X, so right should be +X; CCW accordingly)
-  addFace([-s,-s, s],[ s,-s, s],[ s, s, s],[-s, s, s],[0,0,1]);
-  // -Z (back/north): looking from -Z, up=+Y, right=+X
-  addFace([ s,-s,-s],[-s,-s,-s],[-s, s,-s],[ s, s,-s],[0,0,-1]);
+  addFace([-s,-s,-s],[ s,-s,-s],[ s,-s, s],[-s,-s, s],[0,-1,0], FACE_BOTTOM);
+  // +Z (south/front): looking from +Z, up=+Y, right=+X
+  addFace([-s,-s, s],[ s,-s, s],[ s, s, s],[-s, s, s],[0,0,1], FACE_FRONT);
+  // -Z (north/back): looking from -Z, up=+Y, right=-X (but we keep UV right=+X, so vertex order reflects that)
+  addFace([ s,-s,-s],[-s,-s,-s],[-s, s,-s],[ s, s,-s],[0,0,-1], FACE_BACK);
 
   const g = new THREE.BufferGeometry();
   g.setIndex(indices);
   g.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
   g.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
   g.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+
+  // IMPORTANT: Multi-material meshes require groups; without this Three.js will not render the mesh.
+  for (const gr of groups){
+    g.addGroup(gr.start, gr.count, gr.materialIndex);
+  }
+
   g.computeBoundingSphere();
   return g;
 }
