@@ -219,40 +219,10 @@ controls.enableDamping = true;
     return "block";
   }
 
-  // 任意の連続3ブロックがあれば、その軸方向に「引っ張られる」扱い（端も含む）
-  function pullAxisFor(x, y, z) {
-    const x3 =
-      (hasBlock(x - 2, y, z) && hasBlock(x - 1, y, z)) ||
-      (hasBlock(x - 1, y, z) && hasBlock(x + 1, y, z)) ||
-      (hasBlock(x + 1, y, z) && hasBlock(x + 2, y, z));
-
-    const y3 =
-      (hasBlock(x, y - 2, z) && hasBlock(x, y - 1, z)) ||
-      (hasBlock(x, y - 1, z) && hasBlock(x, y + 1, z)) ||
-      (hasBlock(x, y + 1, z) && hasBlock(x, y + 2, z));
-
-    const z3 =
-      (hasBlock(x, y, z - 2) && hasBlock(x, y, z - 1)) ||
-      (hasBlock(x, y, z - 1) && hasBlock(x, y, z + 1)) ||
-      (hasBlock(x, y, z + 1) && hasBlock(x, y, z + 2));
-
-    const count = (x3 ? 1 : 0) + (y3 ? 1 : 0) + (z3 ? 1 : 0);
-    if (count >= 2) return null; // inside/ambiguous
-    if (x3) return "x";
-    if (y3) return "y";
-    if (z3) return "z";
-    return null;
-  }
-
   // 上下面（立方体の上の面・下の面）の向きを “列方向” に合わせるための回転
   // X方向に引っ張る: 90deg
   // Z方向に引っ張る: 0deg
   // Y方向: ここでは回転不要（column_y時はモデル回転で表現）
-  function topBottomRotationFor(pullAxis) {
-    if (pullAxis === "x") return Math.PI / 2;
-    if (pullAxis === "z") return 0;
-    return null;
-  }
 
   // -------------------------------
   // Materials
@@ -260,7 +230,7 @@ controls.enableDamping = true;
   const BASE_EMISSIVE = 0.45;
   const INSIDE_EMISSIVE = 0.75;
 
-  function makeBaseMaterials(baseTexture, topBottomRotation) {
+  function makeBaseMaterials(baseTexture) {
     const makeMat = (t) =>
       new THREE.MeshStandardMaterial({
         map: t,
@@ -270,20 +240,6 @@ controls.enableDamping = true;
       });
 
     const mats = Array(6).fill(null).map(() => makeMat(baseTexture));
-
-    if (topBottomRotation != null) {
-      const topTex = baseTexture.clone();
-      const botTex = baseTexture.clone();
-      topTex.center.set(0.5, 0.5);
-      botTex.center.set(0.5, 0.5);
-      topTex.rotation = topBottomRotation;
-      botTex.rotation = topBottomRotation;
-      topTex.needsUpdate = true;
-      botTex.needsUpdate = true;
-
-      mats[FACE_TOP] = makeMat(topTex);
-      mats[FACE_BOTTOM] = makeMat(botTex);
-    }
     return mats;
   }
 
@@ -298,7 +254,7 @@ controls.enableDamping = true;
   // -------------------------------
   const W = 16, H = 16;
 
-  function mkCanvasTex(canvas, rotation) {
+  function mkCanvasTex(canvas) {
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = 8;
@@ -306,11 +262,6 @@ controls.enableDamping = true;
     tex.wrapT = THREE.ClampToEdgeWrapping;
     tex.magFilter = THREE.NearestFilter;
     tex.minFilter = THREE.NearestMipmapNearestFilter;
-
-    if (rotation != null) {
-      tex.center.set(0.5, 0.5);
-      tex.rotation = rotation;
-    }
     tex.needsUpdate = true;
     return tex;
   }
@@ -379,8 +330,8 @@ controls.enableDamping = true;
 
   const __LIGHT_SOURCE_CACHE = new Map();
 
-  function __getLightSource(sheetUrl, topBottomRotation) {
-    const key = `${sheetUrl}|${topBottomRotation == null ? "n" : String(topBottomRotation)}`;
+  function __getLightSource(sheetUrl) {
+    const key = `${sheetUrl}`;
     if (__LIGHT_SOURCE_CACHE.has(key)) return __LIGHT_SOURCE_CACHE.get(key);
 
     const canvasA = document.createElement("canvas");
@@ -391,11 +342,8 @@ controls.enableDamping = true;
     const ctxA = canvasA.getContext("2d");
     const ctxB = canvasB.getContext("2d");
 
-    const texA = mkCanvasTex(canvasA, null);
-    const texB = mkCanvasTex(canvasB, null);
-    const texA_tb = topBottomRotation != null ? mkCanvasTex(canvasA, topBottomRotation) : null;
-    const texB_tb = topBottomRotation != null ? mkCanvasTex(canvasB, topBottomRotation) : null;
-
+    const texA = mkCanvasTex(canvasA);
+    const texB = mkCanvasTex(canvasB);
     const sharedMixAlpha = { value: 0.0 };
 
     const matsVisible = [];
@@ -403,13 +351,8 @@ controls.enableDamping = true;
     matsVisible[FACE_LEFT]  = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
     matsVisible[FACE_FRONT] = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
     matsVisible[FACE_BACK]  = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
-
-    if (topBottomRotation != null) {
-      matsVisible[FACE_TOP]    = makeCrossfadeLightMat(texA_tb, texB_tb, sharedMixAlpha, 0.0);
-      matsVisible[FACE_BOTTOM] = makeCrossfadeLightMat(texA_tb, texB_tb, sharedMixAlpha, 0.0);
-    } else {
-      matsVisible[FACE_TOP]    = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
-      matsVisible[FACE_BOTTOM] = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
+    matsVisible[FACE_TOP]    = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
+    matsVisible[FACE_BOTTOM] = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
 
     const faceMapA = [];
     const faceMapB = [];
@@ -417,14 +360,8 @@ controls.enableDamping = true;
     faceMapA[FACE_LEFT]  = texA; faceMapB[FACE_LEFT]  = texB;
     faceMapA[FACE_FRONT] = texA; faceMapB[FACE_FRONT] = texB;
     faceMapA[FACE_BACK]  = texA; faceMapB[FACE_BACK]  = texB;
-    if (topBottomRotation != null) {
-      faceMapA[FACE_TOP]    = texA_tb; faceMapB[FACE_TOP]    = texB_tb;
-      faceMapA[FACE_BOTTOM] = texA_tb; faceMapB[FACE_BOTTOM] = texB_tb;
-    } else {
-      faceMapA[FACE_TOP]    = texA; faceMapB[FACE_TOP]    = texB;
-      faceMapA[FACE_BOTTOM] = texA; faceMapB[FACE_BOTTOM] = texB;
-    }
-    }
+    faceMapA[FACE_TOP]    = texA; faceMapB[FACE_TOP]    = texB;
+    faceMapA[FACE_BOTTOM] = texA; faceMapB[FACE_BOTTOM] = texB;
 
     const invisible = new THREE.MeshStandardMaterial({
       transparent: true,
@@ -442,12 +379,11 @@ controls.enableDamping = true;
       frames: 1,
       ready: false,
       ctxA, ctxB,
-      texA, texB, texA_tb, texB_tb,
+      texA, texB,
       matsVisible,
       faceMapA, faceMapB,
       invisible,
       sharedMixAlpha,
-      topBottomRotation,
       rotMats: new Map(),
     };
 
@@ -455,11 +391,9 @@ controls.enableDamping = true;
       source.frames = Math.max(1, Math.floor(img.height / H));
       drawFrame(source.ctxA, img, 0);
       source.texA.needsUpdate = true;
-      if (source.texA_tb) source.texA_tb.needsUpdate = true;
 
       drawFrame(source.ctxB, img, 1 % source.frames);
       source.texB.needsUpdate = true;
-      if (source.texB_tb) source.texB_tb.needsUpdate = true;
 
       source.ready = true;
     };
@@ -512,8 +446,8 @@ controls.enableDamping = true;
     return false;
   }
 
-  function makeLightsLayer(sheetUrl, topBottomRotation, faceVisibleMask, x, y, z) {
-    const source = __getLightSource(sheetUrl, topBottomRotation);
+  function makeLightsLayer(sheetUrl, faceVisibleMask, x, y, z) {
+    const source = __getLightSource(sheetUrl);
 
     const mats = Array(6);
     for (let fi = 0; fi < 6; fi++) {
@@ -548,9 +482,6 @@ controls.enableDamping = true;
   function makeInstance(x, y, z) {
     const type = classifyType(x, y, z);
 
-    const pullAxis = pullAxisFor(x, y, z);
-    const topBottomRotation = topBottomRotationFor(pullAxis);
-
     
 
     const faceMask = [
@@ -564,16 +495,32 @@ controls.enableDamping = true;
 const isColumn = type.startsWith("column");
     const baseTex = isColumn ? texColumnBase : texBlockBase;
 
-    const baseMats = makeBaseMaterials(baseTex, topBottomRotation);
+    const baseMats = makeBaseMaterials(baseTex);
+
+    // base rotation correction (must match lights +90° rule)
+    for (let fi = 0; fi < 6; fi++) {
+      if (faceMask && faceMask[fi] && __needsLightRot90(fi, x, y, z)) {
+        const mat = baseMats[fi];
+        if (mat && mat.map) {
+          const t = mat.map.clone();
+          t.center.set(0.5, 0.5);
+          t.rotation = (t.rotation || 0) + (Math.PI / 2);
+          t.needsUpdate = true;
+          mat.map = t;
+          if (mat.emissiveMap) mat.emissiveMap = t;
+          mat.needsUpdate = true;
+        }
+      }
+    }
     const baseMesh = new THREE.Mesh(baseGeo, baseMats);
 
     // lights
     const sheetUrl = isColumn ? LIGHT_SHEET_COLUMN_URL : LIGHT_SHEET_BLOCK_URL;
-    const lights = makeLightsLayer(sheetUrl, topBottomRotation, faceMask, x, y, z);
+    const lights = makeLightsLayer(sheetUrl, faceMask, x, y, z);
 // inside overlay (only for inside)
     let insideMesh = null;
     if (type === "inside") {
-      const parity = (x + y + z) & 1;
+      const parity = (Math.abs(x) + Math.abs(y) + Math.abs(z)) & 1;
       const tex = parity ? texInsideA : texInsideB;
       const mat = new THREE.MeshStandardMaterial({
         map: tex,
@@ -796,9 +743,9 @@ instances.push(inst);
     };
 
     // Top 3 layers (1..3): y=6,5,4
-    applyHotfixForYRange(4, 6);
+    // applyHotfixForYRange(4, 6); // disabled: use explicit face-number rules instead
     // Bottom 3 layers (5..7): y=2,1,0
-    applyHotfixForYRange(0, 2);
+    // applyHotfixForYRange(0, 2); // disabled: use explicit face-number rules instead
 
     north.position.set(center.x, y, box.min.z - margin);
     south.position.set(center.x, y, box.max.z + margin);
@@ -978,11 +925,9 @@ instances.push(inst);
 
         drawFrame(src.ctxA, src.img, a);
         src.texA.needsUpdate = true;
-        if (src.texA_tb) src.texA_tb.needsUpdate = true;
 
         drawFrame(src.ctxB, src.img, b);
         src.texB.needsUpdate = true;
-        if (src.texB_tb) src.texB_tb.needsUpdate = true;
       }
     }
 
