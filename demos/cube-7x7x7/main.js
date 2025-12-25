@@ -296,15 +296,18 @@ function makeMCBoxGeometry(size=1.0){
 // Light shader mix material factory
 // -----------------------------
 function makeMixMaterial(texA, texB, mixUniform){
-  const mat = new THREE.MeshStandardMaterial({
+  // Additive overlay for lights: must never hide the base texture.
+  // Use MeshBasicMaterial + AdditiveBlending so black pixels do not occlude.
+  const mat = new THREE.MeshBasicMaterial({
     map: texA,
-    emissiveMap: texA,
-    emissive: new THREE.Color(0xffffff),
-    emissiveIntensity: 2.0,
     transparent: true,
     opacity: 1.0,
     depthWrite: false,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
   });
+  // Prevent tone mapping from dimming the emissive overlay (Three r15x+)
+  mat.toneMapped = false;
 
   mat.onBeforeCompile = (shader)=>{
     shader.uniforms.mapB = { value: texB };
@@ -312,7 +315,10 @@ function makeMixMaterial(texA, texB, mixUniform){
 
     shader.fragmentShader = shader.fragmentShader.replace(
       "#include <common>",
-      "#include <common>\nuniform sampler2D mapB;\nuniform float mixAlpha;\n"
+      "#include <common>
+uniform sampler2D mapB;
+uniform float mixAlpha;
+"
     );
 
     shader.fragmentShader = shader.fragmentShader.replace(
@@ -323,20 +329,10 @@ function makeMixMaterial(texA, texB, mixUniform){
   vec4 texelColorB = texture2D( mapB, vMapUv );
   vec4 texelColor = mix(texelColorA, texelColorB, mixAlpha);
   texelColor = mapTexelToLinear( texelColor );
-  diffuseColor *= texelColor;
-#endif
-      `
-    );
-
-    shader.fragmentShader = shader.fragmentShader.replace(
-      "#include <emissivemap_fragment>",
-      `
-#ifdef USE_EMISSIVEMAP
-  vec4 eA = texture2D( emissiveMap, vEmissiveMapUv );
-  vec4 eB = texture2D( mapB, vEmissiveMapUv );
-  eA = emissiveMapTexelToLinear(eA);
-  eB = emissiveMapTexelToLinear(eB);
-  totalEmissiveRadiance *= mix(eA.rgb, eB.rgb, mixAlpha);
+  // For additive lights, treat alpha as brightness; black becomes effectively transparent.
+  float a = max(max(texelColor.r, texelColor.g), texelColor.b);
+  diffuseColor.rgb *= texelColor.rgb;
+  diffuseColor.a *= a;
 #endif
       `
     );
@@ -344,6 +340,16 @@ function makeMixMaterial(texA, texB, mixUniform){
 
   return mat;
 }
+
+function rotateTexture90(tex){
+  // Clone and apply +90° rotation around center (0.5,0.5)
+  const t = tex.clone();
+  t.center.set(0.5,0.5);
+  t.rotation = ROT_90;
+  t.needsUpdate = true;
+  return t;
+}
+
 
 function rotateTexture90(tex){
   // Clone and apply +90° rotation around center (0.5,0.5)
