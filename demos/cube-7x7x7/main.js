@@ -239,8 +239,8 @@ const TEX = {
   // lights (sprite sheets)
   block_l:         `${ASSET_BASE}/controller_lights.png`,
   column_l:        `${ASSET_BASE}/controller_column_lights.png`,
-  inside_a_l:      `${ASSET_BASE}/controller_inside_a_lights.png`,
-  inside_b_l:      `${ASSET_BASE}/controller_inside_b_lights.png`,
+  inside_a_l:      `${ASSET_BASE}/controller_lights.png`,
+  inside_b_l:      `${ASSET_BASE}/controller_lights.png`,
 };
 
 // -----------------------------
