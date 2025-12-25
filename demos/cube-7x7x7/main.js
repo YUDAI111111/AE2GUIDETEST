@@ -474,6 +474,9 @@ function stepLightSource(src, dt, speed=1.0){
   camera.position.set(11, 11, 13);
 
   const renderer = new THREE.WebGLRenderer({ antialias:true });
+  // Color management: make texture display predictable across Three.js versions
+  if ('outputColorSpace' in renderer) renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.NoToneMapping;
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   // Ensure correct color management for textured materials
@@ -489,6 +492,8 @@ function stepLightSource(src, dt, speed=1.0){
 
   const hemi = new THREE.HemisphereLight(0xffffff, 0x101010, 0.8);
   scene.add(hemi);
+  const amb = new THREE.AmbientLight(0xffffff, 1.2);
+  scene.add(amb);
   const dir = new THREE.DirectionalLight(0xffffff, 1.1);
   dir.position.set(7, 10, 6);
   scene.add(dir);
