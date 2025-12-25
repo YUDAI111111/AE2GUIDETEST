@@ -31,7 +31,7 @@ const FACE_BACK  = 5;  // -Z (north)
 const ROT_90 = Math.PI / 2;
 
 const ROT90_NORTH_SOUTH = new Set([16, 20, 30, 34]);
-const ROT90_UP_DOWN = new Set([11, 39]);
+const ROT90_UP_DOWN = new Set([2, 6, 11, 16, 20, 30, 34, 39, 44, 48]);
 
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 
@@ -395,10 +395,10 @@ function makeMixMaterial(texA, texB, mixUniform){
 }
 
 function rotateTexture90(tex){
-  // Clone and apply +90° rotation around center (0.5,0.5)
+  // Clone and apply -90° rotation around center (0.5,0.5)
   const t = tex.clone();
   t.center.set(0.5,0.5);
-  t.rotation = ROT_90;
+  t.rotation = -ROT_90;
   t.needsUpdate = true;
   return t;
 }
