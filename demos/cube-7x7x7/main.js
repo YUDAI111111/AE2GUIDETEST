@@ -98,6 +98,9 @@ function safeNowMs(){ return (typeof performance !== "undefined" && performance.
 // Debug UI
 // -----------------------------
 function makeDebugUI(){
+  const __DBG_KEY = "cube7x7x7_debug_hidden";
+  const __dbgHidden = (localStorage.getItem(__DBG_KEY) === "1");
+
   const root = document.createElement("div");
   root.style.cssText = [
     "position:fixed;top:10px;right:10px;z-index:9999",
@@ -166,6 +169,42 @@ function makeDebugUI(){
   root.appendChild(hint);
 
   document.body.appendChild(root);
+  // Close button (persist)
+  const closeBtn = document.createElement("button");
+  closeBtn.textContent = "×";
+  closeBtn.title = "Close debug";
+  closeBtn.style.cssText = "position:absolute;right:6px;top:6px;width:26px;height:26px;border-radius:6px;border:0;" +
+                           "background:rgba(255,255,255,0.15);color:#fff;cursor:pointer;font-size:18px;line-height:26px;";
+  closeBtn.addEventListener("click", () => {
+    root.style.display = "none";
+    localStorage.setItem(__DBG_KEY, "1");
+    showBtn.style.display = "block";
+    requestRender && requestRender();
+  });
+  root.style.position = "fixed"; // ensure absolute close works
+  root.appendChild(closeBtn);
+
+  // Re-open button
+  const showBtn = document.createElement("button");
+  showBtn.textContent = "Show DEBUG";
+  showBtn.title = "Show debug panel";
+  showBtn.style.cssText = "position:fixed;right:12px;top:12px;z-index:99999;padding:6px 10px;border-radius:10px;" +
+                          "border:0;background:rgba(0,0,0,0.7);color:#fff;cursor:pointer;font:12px/1.2 ui-monospace,Consolas,monospace;";
+  showBtn.addEventListener("click", () => {
+    root.style.display = "block";
+    localStorage.setItem(__DBG_KEY, "0");
+    showBtn.style.display = "none";
+    requestRender && requestRender();
+  });
+  document.body.appendChild(showBtn);
+
+  if (__dbgHidden){
+    root.style.display = "none";
+    showBtn.style.display = "block";
+  } else {
+    showBtn.style.display = "none";
+  }
+
 
   return { root, mkToggle, mkSelect, pickText, texList };
 }
@@ -502,6 +541,7 @@ function stepLightSource(src, dt, speed=1.0){
   document.body.appendChild(renderer.domElement);
 
   const controls = new OrbitControls(camera, renderer.domElement);
+  controls.addEventListener("change", () => { requestRender(); });
   // --- Wheel zoom tuning (mouse wheel) ---
   controls.zoomSpeed = 0.25;
   controls.minDistance = 4;
@@ -529,16 +569,17 @@ function stepLightSource(src, dt, speed=1.0){
 
   // Settings (toggles)
   let PURE_AE2 = true;        // always true in this rebuild (kept for UI compatibility)
-  let LIGHTS_ENABLED = true;
-  let ANIM_ENABLED = true;
+  let LIGHTS_ENABLED = false;
+  let ANIM_ENABLED = false;
   let WIREFRAME = false;
   let LABELS_ENABLED = false;
   let MATERIAL_MODE = "ae2";  // "ae2" | "uv" | "faces"
 
-  const cbPure = dbg.mkToggle("Pure AE2", PURE_AE2, (v)=>{ PURE_AE2=v; rebuildWorld(); });
+  const cbPure = dbg.mkToggle("Pure AE2", PURE_AE2, (v)=>{ PURE_AE2=v; rebuildWorld();   if (ANIM_ENABLED) { __startAnimLoop(); } else { requestRender(); }
+});
   cbPure.disabled = true; // by design in clean rebuild; no legacy mode.
   const cbLights = dbg.mkToggle("Lights", LIGHTS_ENABLED, (v)=>{ LIGHTS_ENABLED=v; rebuildWorld(); });
-  const cbAnim = dbg.mkToggle("Anim", ANIM_ENABLED, (v)=>{ ANIM_ENABLED=v; });
+  const cbAnim = dbg.mkToggle("Anim", ANIM_ENABLED, (v)=>{ ANIM_ENABLED = v; if (ANIM_ENABLED) { __startAnimLoop(); } else { __stopAnimLoop(); requestRender(); } });
   const cbWire = dbg.mkToggle("Wire", WIREFRAME, (v)=>{ WIREFRAME=v; rebuildWorld(); });
   const cbLabels = dbg.mkToggle("Labels", LABELS_ENABLED, (v)=>{ LABELS_ENABLED=v; rebuildWorld(); });
 
@@ -889,7 +930,52 @@ function stepLightSource(src, dt, speed=1.0){
 
   // Animation loop
   let last = safeNowMs();
-  function tick(){
+  // ---- Performance: cap animation FPS + stop loop when not needed ----
+  const __ANIM_FPS_CAP = 30;
+  const __MIN_FRAME_MS = 1000 / __ANIM_FPS_CAP;
+  let __animRaf = null;
+  let __lastFrameMs = 0;
+
+  function __startAnimLoop(){
+    if (__animRaf != null) return;
+    __lastFrameMs = 0;
+    __animRaf = __animRaf = requestAnimationFrame(tick);
+  }
+  function __stopAnimLoop(){
+    if (__animRaf == null) return;
+    cancelAnimationFrame(__animRaf);
+    __animRaf = null;
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) __stopAnimLoop();
+    else if (ANIM_ENABLED) __startAnimLoop();
+  });
+
+  // Render-on-demand when animation is OFF
+  let __renderRequested = false;
+  function requestRender(){
+    if (__renderRequested) return;
+    __renderRequested = true;
+    requestAnimationFrame(() => {
+      __renderRequested = false;
+      renderer.render(scene, camera);
+    });
+  }
+
+  function tick(t){
+    // Stop continuous rendering unless animation is enabled and tab is visible
+    if (!ANIM_ENABLED || document.hidden){
+      __stopAnimLoop();
+      requestRender();
+      return;
+    }
+    if (!t) t = performance.now();
+    if (__lastFrameMs && (t - __lastFrameMs) < __MIN_FRAME_MS){
+      __animRaf = __animRaf = requestAnimationFrame(tick);
+      return;
+    }
+    __lastFrameMs = t;
+
     requestAnimationFrame(tick);
     controls.update();
 
