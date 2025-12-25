@@ -352,6 +352,15 @@ controls.enableDamping = true;
   }
 
 
+  // shared invisible material for hidden faces
+  const invisibleMat = new THREE.MeshStandardMaterial({
+    transparent: true,
+    opacity: 0.0,
+    depthWrite: false,
+    colorWrite: false,
+  });
+
+
   // -------------------------------
   // Lights (sprite-sheet -> canvas textures -> crossfade)
   let LIGHTS_ENABLED = true;
