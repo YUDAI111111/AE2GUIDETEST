@@ -502,6 +502,37 @@ function stepLightSource(src, dt, speed=1.0){
   document.body.appendChild(renderer.domElement);
 
   const controls = new OrbitControls(camera, renderer.domElement);
+  controls.addEventListener(\"change\", () => { if (typeof requestRenderIfNotRequested === \"function\") requestRenderIfNotRequested(); });
+  // --- Wheel zoom tuning (mouse wheel) ---
+  // OrbitControls' default wheel mapping can feel extremely sensitive on some browsers.
+  controls.zoomSpeed = 0.25;           // reduce zoom aggressiveness
+  controls.minDistance = 4;            // prevent accidental zoom-through
+  controls.maxDistance = 180;          // cap zoom-out to keep navigation stable
+  // Use a custom wheel handler with clamped delta to avoid "one tick => huge zoom".
+  controls.enableZoom = false;
+
+  const __WHEEL_K = 0.0025; // smaller = less zoom per wheel delta
+  renderer.domElement.addEventListener("wheel", (e) => {
+    // prevent the page from scrolling while zooming the canvas
+    e.preventDefault();
+
+    // Normalize / clamp delta (typical wheel notch is ~100)
+    const dy = Math.max(-120, Math.min(120, e.deltaY || 0));
+    if (dy === 0) return;
+
+    // factor > 1 => zoom out, < 1 => zoom in
+    const factor = Math.exp(dy * __WHEEL_K);
+
+    if (factor > 1) {
+      controls.dollyOut(factor);
+    } else {
+      controls.dollyIn(1 / factor);
+    }
+    controls.update();
+    // request a render (supports both continuous and on-demand loops)
+    if (typeof requestRenderIfNotRequested === "function") requestRenderIfNotRequested();
+  }, { passive: false });
+
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
   controls.enablePan = false;
@@ -881,7 +912,22 @@ function stepLightSource(src, dt, speed=1.0){
 
   // Animation loop
   let last = safeNowMs();
-  function tick(){
+  
+  // Render-on-demand helper: render only when needed (reduces CPU when idle)
+  let __renderRequested = false;
+  function requestRenderIfNotRequested(){
+    if (__renderRequested) return;
+    __renderRequested = true;
+    requestAnimationFrame(() => {
+      __renderRequested = false;
+      try {
+        renderer.render(scene, camera);
+      } catch (e) {
+        // ignore render errors
+      }
+    });
+  }
+function tick(){
     requestAnimationFrame(tick);
     controls.update();
 
