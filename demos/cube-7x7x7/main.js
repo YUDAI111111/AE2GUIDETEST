@@ -472,9 +472,27 @@ function stepLightSource(src, dt, speed=1.0){
   document.body.style.background = "#000";
 
   const dbg = makeDebugUI();
+  // HUD overlay (render-loop + build verification)
+  const hud = document.createElement("div");
+  hud.style.cssText = "position:fixed;left:10px;top:10px;z-index:99999;padding:8px 10px;border-radius:8px;" +
+                      "background:rgba(0,0,0,0.7);color:#fff;font:12px/1.4 ui-monospace,Consolas,monospace;max-width:46vw";
+  hud.textContent = "BOOT...";
+  document.body.appendChild(hud);
+
 
   // Scene / camera / renderer
   const scene = new THREE.Scene();
+  // Always-visible debug primitives (unlit)
+  const axes = new THREE.AxesHelper(4);
+  scene.add(axes);
+
+  const testCube = new THREE.Mesh(
+    new THREE.BoxGeometry(1,1,1),
+    new THREE.MeshBasicMaterial({ color: 0x00ff00, wireframe: false, side: THREE.DoubleSide })
+  );
+  testCube.position.set(0,0,0);
+  scene.add(testCube);
+
   scene.background = new THREE.Color(0x070707);
 
   const camera = new THREE.PerspectiveCamera(55, window.innerWidth/window.innerHeight, 0.1, 1000);
@@ -844,6 +862,21 @@ function stepLightSource(src, dt, speed=1.0){
 
   rebuildWorld();
 
+  // expose for HUD
+  let __blockCount = 0;
+  // wrap rebuildWorld to update HUD
+  const __origRebuildWorld = rebuildWorld;
+  rebuildWorld = function(){
+    __blockCount = 0;
+    __origRebuildWorld();
+    // count top-level block groups
+    __blockCount = worldGroup.children.length;
+    if (typeof hud !== 'undefined') hud.textContent = `RUNNING | blocks=${__blockCount} | lights=${LIGHTS_ENABLED} | anim=${ANIM_ENABLED} | material=${MATERIAL_MODE}`;
+  };
+  // rebuild once to set HUD
+  rebuildWorld();
+
+
   // Resize
   window.addEventListener("resize", ()=>{
     camera.aspect = window.innerWidth/window.innerHeight;
@@ -868,7 +901,18 @@ function stepLightSource(src, dt, speed=1.0){
       stepLightSource(lightSrcByType.inside_a, dt, 1.0);
       stepLightSource(lightSrcByType.inside_b, dt, 1.0);
     }
+    
+    // Spin the always-visible test cube so we can confirm render loop
+    testCube.rotation.y += dt * 0.8;
+    testCube.rotation.x += dt * 0.5;
+
+    // Update HUD line every frame (cheap)
+    if (typeof hud !== 'undefined') {
+      hud.textContent = `RUNNING | blocks=${worldGroup.children.length} | lights=${LIGHTS_ENABLED} | anim=${ANIM_ENABLED} | material=${MATERIAL_MODE}`;
+    }
+
     renderer.render(scene, camera);
+
   }
   tick();
 })().catch((e)=>{
