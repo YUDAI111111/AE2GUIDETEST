@@ -294,6 +294,8 @@ controls.enableDamping = true;
   let LIGHTS_FPS = 6; // reduced for performance
 
   // -------------------------------
+    // OPT(A+B): single-mesh crossfade (shader patch) + shared sources (update once per sheet/rotation)
+  // -------------------------------
   const W = 16, H = 16;
 
   function mkCanvasTex(canvas, rotation) {
@@ -318,7 +320,67 @@ controls.enableDamping = true;
     ctx.drawImage(img, 0, idx * H, W, H, 0, 0, W, H);
   }
 
-  function makeLightsLayer(sheetUrl, topBottomRotation, faceVisibleMask) {
+  // Patch MeshStandardMaterial to blend map(A) and mapB with a shared mixAlpha uniform.
+  function makeCrossfadeLightMat(mapA, mapB, sharedMixAlpha) {
+    const mat = new THREE.MeshStandardMaterial({
+      map: mapA,
+      transparent: true,
+      opacity: 1.0,
+      emissiveMap: mapA,
+      emissive: new THREE.Color(0xffffff),
+      emissiveIntensity: 2.0,
+      depthWrite: false,
+    });
+
+    mat.userData.__mixAlpha = sharedMixAlpha;
+
+    mat.onBeforeCompile = (shader) => {
+      shader.uniforms.mapB = { value: mapB };
+      shader.uniforms.mixAlpha = sharedMixAlpha;
+
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <common>",
+        "#include <common>
+uniform sampler2D mapB;
+uniform float mixAlpha;"
+      );
+
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <map_fragment>",
+        `
+#ifdef USE_MAP
+  vec4 texelColorA = texture2D( map, vMapUv );
+  vec4 texelColorB = texture2D( mapB, vMapUv );
+  vec4 texelColor = mix( texelColorA, texelColorB, mixAlpha );
+  texelColor = mapTexelToLinear( texelColor );
+  diffuseColor *= texelColor;
+#endif
+        `
+      );
+
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <emissivemap_fragment>",
+        `
+#ifdef USE_EMISSIVEMAP
+  vec4 emissiveColorA = texture2D( emissiveMap, vEmissiveMapUv );
+  vec4 emissiveColorB = texture2D( mapB, vEmissiveMapUv );
+  emissiveColorA = emissiveMapTexelToLinear( emissiveColorA );
+  emissiveColorB = emissiveMapTexelToLinear( emissiveColorB );
+  totalEmissiveRadiance *= mix( emissiveColorA.rgb, emissiveColorB.rgb, mixAlpha );
+#endif
+        `
+      );
+    };
+
+    return mat;
+  }
+
+  const __LIGHT_SOURCE_CACHE = new Map();
+
+  function __getLightSource(sheetUrl, topBottomRotation) {
+    const key = `${sheetUrl}|${topBottomRotation == null ? "n" : String(topBottomRotation)}`;
+    if (__LIGHT_SOURCE_CACHE.has(key)) return __LIGHT_SOURCE_CACHE.get(key);
+
     const canvasA = document.createElement("canvas");
     const canvasB = document.createElement("canvas");
     canvasA.width = W; canvasA.height = H;
@@ -332,82 +394,79 @@ controls.enableDamping = true;
     const texA_tb = topBottomRotation != null ? mkCanvasTex(canvasA, topBottomRotation) : null;
     const texB_tb = topBottomRotation != null ? mkCanvasTex(canvasB, topBottomRotation) : null;
 
-    const makeLightMat = (t) =>
-      new THREE.MeshStandardMaterial({
-        map: t,
-        transparent: true,
-        opacity: 0.0,
-        emissiveMap: t,
-        emissive: new THREE.Color(0xffffff),
-        emissiveIntensity: 2.0,
-        depthWrite: false,
-      });
+    const sharedMixAlpha = { value: 0.0 };
 
-    const matsA = Array(6).fill(null).map(() => makeLightMat(texA));
-    const matsB = Array(6).fill(null).map(() => makeLightMat(texB));
+    const matsVisible = [];
+    matsVisible[FACE_RIGHT] = makeCrossfadeLightMat(texA, texB, sharedMixAlpha);
+    matsVisible[FACE_LEFT]  = makeCrossfadeLightMat(texA, texB, sharedMixAlpha);
+    matsVisible[FACE_FRONT] = makeCrossfadeLightMat(texA, texB, sharedMixAlpha);
+    matsVisible[FACE_BACK]  = makeCrossfadeLightMat(texA, texB, sharedMixAlpha);
+
     if (topBottomRotation != null) {
-      matsA[FACE_TOP] = makeLightMat(texA_tb);
-      matsA[FACE_BOTTOM] = makeLightMat(texA_tb);
-      matsB[FACE_TOP] = makeLightMat(texB_tb);
-      matsB[FACE_BOTTOM] = makeLightMat(texB_tb);
+      matsVisible[FACE_TOP]    = makeCrossfadeLightMat(texA_tb, texB_tb, sharedMixAlpha);
+      matsVisible[FACE_BOTTOM] = makeCrossfadeLightMat(texA_tb, texB_tb, sharedMixAlpha);
+    } else {
+      matsVisible[FACE_TOP]    = makeCrossfadeLightMat(texA, texB, sharedMixAlpha);
+      matsVisible[FACE_BOTTOM] = makeCrossfadeLightMat(texA, texB, sharedMixAlpha);
     }
 
-
-    // Hide lights on internal faces (neighbors exist) to reduce draw cost
-    if (faceVisibleMask && faceVisibleMask.length === 6) {
-      const invisible = new THREE.MeshStandardMaterial({
-        transparent: true,
-        opacity: 0.0,
-        depthWrite: false,
-      });
-      for (let fi = 0; fi < 6; fi++) {
-        if (!faceVisibleMask[fi]) {
-          matsA[fi] = invisible;
-          matsB[fi] = invisible;
-        }
-      }
-    }
-
-    const meshA = new THREE.Mesh(baseGeo, matsA);
-    const meshB = new THREE.Mesh(baseGeo, matsB);
-    meshA.scale.setScalar(1.001);
-    meshB.scale.setScalar(1.001);
+    const invisible = new THREE.MeshStandardMaterial({
+      transparent: true,
+      opacity: 0.0,
+      depthWrite: false,
+    });
 
     const img = new Image();
     img.decoding = "async";
     img.src = sheetUrl;
 
-    const layer = {
+    const source = {
       sheetUrl,
       img,
       frames: 1,
       ready: false,
       ctxA, ctxB,
       texA, texB, texA_tb, texB_tb,
-      matsA, matsB,
-      meshA, meshB,
+      matsVisible,
+      invisible,
+      sharedMixAlpha,
       topBottomRotation,
     };
 
     img.onload = () => {
-      layer.frames = Math.max(1, Math.floor(img.height / H));
-      drawFrame(layer.ctxA, img, 0);
-      layer.texA.needsUpdate = true;
-      if (layer.texA_tb) layer.texA_tb.needsUpdate = true;
+      source.frames = Math.max(1, Math.floor(img.height / H));
+      drawFrame(source.ctxA, img, 0);
+      source.texA.needsUpdate = true;
+      if (source.texA_tb) source.texA_tb.needsUpdate = true;
 
-      drawFrame(layer.ctxB, img, 1 % layer.frames);
-      layer.texB.needsUpdate = true;
-      if (layer.texB_tb) layer.texB_tb.needsUpdate = true;
+      drawFrame(source.ctxB, img, 1 % source.frames);
+      source.texB.needsUpdate = true;
+      if (source.texB_tb) source.texB_tb.needsUpdate = true;
 
-      layer.ready = true;
+      source.ready = true;
     };
 
     img.onerror = (e) => {
       console.error("Failed to load lights sheet:", sheetUrl, e);
-      layer.ready = false;
+      source.ready = false;
     };
 
-    return layer;
+    __LIGHT_SOURCE_CACHE.set(key, source);
+    return source;
+  }
+
+  function makeLightsLayer(sheetUrl, topBottomRotation, faceVisibleMask) {
+    const source = __getLightSource(sheetUrl, topBottomRotation);
+
+    const mats = Array(6);
+    for (let fi = 0; fi < 6; fi++) {
+      mats[fi] = (faceVisibleMask && faceVisibleMask[fi]) ? source.matsVisible[fi] : source.invisible;
+    }
+
+    const mesh = new THREE.Mesh(baseGeo, mats);
+    mesh.scale.setScalar(1.001);
+
+    return { source, mesh };
   }
 
   // -------------------------------
@@ -437,10 +496,7 @@ const isColumn = type.startsWith("column");
 
     // lights
     const sheetUrl = isColumn ? LIGHT_SHEET_COLUMN_URL : LIGHT_SHEET_BLOCK_URL;
-    const lights = LIGHTS_ENABLED ? makeLightsLayer(sheetUrl, topBottomRotation, faceMask) : null;
-
-    
-    if (lights && lights.meshB) lights.meshB.visible = false; // perf: disable crossfade
+    const lights = makeLightsLayer(sheetUrl, topBottomRotation, faceMask);
 // inside overlay (only for inside)
     let insideMesh = null;
     if (type === "inside") {
@@ -456,7 +512,7 @@ const isColumn = type.startsWith("column");
     }
 
     const group = new THREE.Group();
-    group.add(baseMesh, lights.meshA, lights.meshB);
+    group.add(baseMesh, lights.mesh);
     if (insideMesh) group.add(insideMesh);
 
     // AE2-like rotations for column variants (model orientation)
@@ -738,8 +794,9 @@ instances.push(inst);
     panel.appendChild(
       mkRow("Animate", true, (v) => {
         ANIM_ENABLED = v;
-        __requestRender();
-      })
+        // Reset time accumulator so re-enabling does not "jump"
+        if (v) last = performance.now();
+        __requestRender();})
     );
 
 
@@ -751,8 +808,7 @@ instances.push(inst);
         __requestRender();
         for (const inst of instances) {
           if (!inst.lights || !LIGHTS_ENABLED) continue;
-          inst.lights.meshA.visible = v;
-          inst.lights.meshB.visible = v;
+          inst.lights.mesh.visible = v;
         }
       })
     );
@@ -831,7 +887,6 @@ instances.push(inst);
   function updateLights(dt) {
     t += dt;
 
-
     if (!LIGHTS_ENABLED) return;
     const cycleSeconds = 1 / Math.max(1, LIGHTS_FPS);
     const phase = (t % cycleSeconds) / cycleSeconds;
@@ -842,29 +897,25 @@ instances.push(inst);
       frameA++;
       frameB = frameA + 1;
 
-      for (const inst of instances) {
-        const l = inst.lights;
-      const hasB = !!l.meshB;
-        if (!l.ready) continue;
-        const a = frameA % l.frames;
-        const b = frameB % l.frames;
+      // Update each unique light source once (A+B)
+      for (const src of __LIGHT_SOURCE_CACHE.values()) {
+        if (!src.ready) continue;
+        const a = frameA % src.frames;
+        const b = frameB % src.frames;
 
-        drawFrame(l.ctxA, l.img, a);
-        l.texA.needsUpdate = true;
-        if (l.texA_tb) l.texA_tb.needsUpdate = true;
+        drawFrame(src.ctxA, src.img, a);
+        src.texA.needsUpdate = true;
+        if (src.texA_tb) src.texA_tb.needsUpdate = true;
 
-        drawFrame(l.ctxB, l.img, b);
-        l.texB.needsUpdate = true;
-        if (l.texB_tb) l.texB_tb.needsUpdate = true;
+        drawFrame(src.ctxB, src.img, b);
+        src.texB.needsUpdate = true;
+        if (src.texB_tb) src.texB_tb.needsUpdate = true;
       }
     }
 
-    // apply crossfade
-    for (const inst of instances) {
-      const l = inst.lights;
-      const hasB = !!l.meshB;
-      for (const m of l.matsA) m.opacity = (l.ready ? (1.0 - alpha) : 0.0);
-      if (hasB) for (const m of l.matsB) m.opacity = (l.ready ? alpha : 0.0);
+    // apply crossfade alpha (shared uniform per source)
+    for (const src of __LIGHT_SOURCE_CACHE.values()) {
+      src.sharedMixAlpha.value = (src.ready ? alpha : 0.0);
     }
   }
 
