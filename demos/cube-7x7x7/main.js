@@ -304,6 +304,7 @@ function makeMixMaterial(texA, texB, mixUniform){
     transparent: true,
     opacity: 1.0,
     depthWrite: false,
+    side: THREE.DoubleSide,
   });
 
   mat.onBeforeCompile = (shader)=>{
@@ -655,12 +656,12 @@ function stepLightSource(src, dt, speed=1.0){
   function baseMaterialFromTexture(tex){
     if (!tex) {
       // fallback to obvious error material
-      return new THREE.MeshStandardMaterial({ color: 0xff00ff, roughness:0.8, metalness:0.0, wireframe:WIREFRAME });
+      return new THREE.MeshStandardMaterial({ color: 0xff00ff, roughness:0.8, metalness:0.0, wireframe:WIREFRAME, side: THREE.DoubleSide });
     }
-    return new THREE.MeshStandardMaterial({ map: tex, roughness:0.9, metalness:0.0, wireframe:WIREFRAME });
+    return new THREE.MeshStandardMaterial({ map: tex, roughness:0.9, metalness:0.0, wireframe:WIREFRAME, side: THREE.DoubleSide });
   }
 
-  const invisibleMat = new THREE.MeshStandardMaterial({ transparent:true, opacity:0.0, depthWrite:false });
+  const invisibleMat = new THREE.MeshStandardMaterial({ transparent:true, opacity:0.0, depthWrite:false, side: THREE.DoubleSide });
 
   // Labels
   function makeLabel(text){
@@ -726,7 +727,7 @@ function stepLightSource(src, dt, speed=1.0){
   }
 
   function makeFaceColorMats(){
-    const mk = (c)=> new THREE.MeshStandardMaterial({ color:c, roughness:0.85, metalness:0.0, wireframe:WIREFRAME });
+    const mk = (c)=> new THREE.MeshStandardMaterial({ color:c, roughness:0.85, metalness:0.0, wireframe:WIREFRAME, side: THREE.DoubleSide });
     const m = new Array(6);
     m[FACE_RIGHT] = mk(0xff5555);
     m[FACE_LEFT]  = mk(0x55ff55);
