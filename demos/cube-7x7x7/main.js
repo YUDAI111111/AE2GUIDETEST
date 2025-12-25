@@ -71,10 +71,10 @@ function needsRot90ForFace(x,y,z,faceIndex){
     return ROT90_NORTH_SOUTH.has(faceNumSouth(x,y,z));
   }
   if (faceIndex === FACE_TOP && y === GRID-1) { // up
-    return ROT90_ENABLE_UP_DOWN && ROT90_UP_DOWN.has(faceNumUp(x,y,z));
+    return false;
   }
   if (faceIndex === FACE_BOTTOM && y === 0) { // down
-    return ROT90_ENABLE_UP_DOWN && ROT90_UP_DOWN.has(faceNumDown(x,y,z));
+    return false;
   }
   return false;
 }
