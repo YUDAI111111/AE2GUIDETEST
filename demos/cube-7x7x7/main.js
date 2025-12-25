@@ -200,6 +200,78 @@ controls.enableDamping = true;
   const FACE_RIGHT = 0, FACE_LEFT = 1, FACE_TOP = 2, FACE_BOTTOM = 3, FACE_FRONT = 4, FACE_BACK = 5;
 
   // -------------------------------
+  // World/local face mapping
+  // - We rotate the whole block (group.rotation) to express column direction.
+  // - Therefore, visibility and per-world-face corrections must be mapped onto local face indices.
+  // Face index order follows BoxGeometry: RIGHT, LEFT, TOP, BOTTOM, FRONT(south +Z), BACK(north -Z)
+  const WORLD_RIGHT = FACE_RIGHT;
+  const WORLD_LEFT = FACE_LEFT;
+  const WORLD_TOP = FACE_TOP;
+  const WORLD_BOTTOM = FACE_BOTTOM;
+  const WORLD_SOUTH = FACE_FRONT;
+  const WORLD_NORTH = FACE_BACK;
+
+  const __LOCAL_FACE_NORMALS = [
+    new THREE.Vector3( 1, 0, 0), // RIGHT
+    new THREE.Vector3(-1, 0, 0), // LEFT
+    new THREE.Vector3( 0, 1, 0), // TOP
+    new THREE.Vector3( 0,-1, 0), // BOTTOM
+    new THREE.Vector3( 0, 0, 1), // FRONT (south)
+    new THREE.Vector3( 0, 0,-1), // BACK  (north)
+  ];
+
+  function __worldFaceFromNormal(n) {
+    const ax = Math.abs(n.x), ay = Math.abs(n.y), az = Math.abs(n.z);
+    if (ax >= ay && ax >= az) return n.x >= 0 ? WORLD_RIGHT : WORLD_LEFT;
+    if (ay >= ax && ay >= az) return n.y >= 0 ? WORLD_TOP : WORLD_BOTTOM;
+    return n.z >= 0 ? WORLD_SOUTH : WORLD_NORTH;
+  }
+
+  // Precompute localFace -> worldFace for each block type (based on group.rotation).
+  const __FACE_LOCAL_TO_WORLD = (() => {
+    const mapForAngles = (rx, ry) => {
+      const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, 0, "XYZ"));
+      return __LOCAL_FACE_NORMALS.map((v) => __worldFaceFromNormal(v.clone().applyQuaternion(q)));
+    };
+    return {
+      block:    mapForAngles(0, 0),
+      inside:   mapForAngles(0, 0),
+      column_y: mapForAngles(0, 0),
+      column_z: mapForAngles(Math.PI / 2, 0),
+      column_x: mapForAngles(Math.PI / 2, Math.PI / 2),
+    };
+  })();
+
+  function __worldVisibleMask(x, y, z) {
+    // per WORLD_* (same numeric indices as FACE_*)
+    const m = [];
+    m[WORLD_RIGHT]  = !hasBlock(x + 1, y, z);
+    m[WORLD_LEFT]   = !hasBlock(x - 1, y, z);
+    m[WORLD_TOP]    = !hasBlock(x, y + 1, z);
+    m[WORLD_BOTTOM] = !hasBlock(x, y - 1, z);
+    m[WORLD_SOUTH]  = !hasBlock(x, y, z + 1);
+    m[WORLD_NORTH]  = !hasBlock(x, y, z - 1);
+    return m;
+  }
+
+  function __needsRot90World(worldFace, x, y, z) {
+    if (z === GRID_SIZE - 1 && worldFace === WORLD_SOUTH) {
+      return __LIGHT_ROT90.south.has(__numXY(x, y));
+    }
+    if (z === 0 && worldFace === WORLD_NORTH) {
+      return __LIGHT_ROT90.north.has(__numXY(x, y));
+    }
+    if (y === GRID_SIZE - 1 && worldFace === WORLD_TOP) {
+      return __LIGHT_ROT90.top.has(__numXZ(x, z));
+    }
+    if (y === 0 && worldFace === WORLD_BOTTOM) {
+      return __LIGHT_ROT90.bottom.has(__numXZ(x, z));
+    }
+    return false;
+  }
+
+
+  // -------------------------------
   // AE2-like connectivity rules
   // -------------------------------
 
@@ -219,10 +291,16 @@ controls.enableDamping = true;
     return "block";
   }
 
+  // 任意の連続3ブロックがあれば、その軸方向に「引っ張られる」扱い（端も含む）
+  // [REMOVED] pullAxisFor: column orientation is expressed by mesh rotation only.
+
+
   // 上下面（立方体の上の面・下の面）の向きを “列方向” に合わせるための回転
   // X方向に引っ張る: 90deg
   // Z方向に引っ張る: 0deg
   // Y方向: ここでは回転不要（column_y時はモデル回転で表現）
+  // [REMOVED] topBottomRotationFor: column orientation is expressed by mesh rotation only.
+
 
   // -------------------------------
   // Materials
@@ -239,9 +317,40 @@ controls.enableDamping = true;
         emissiveIntensity: BASE_EMISSIVE,
       });
 
-    const mats = Array(6).fill(null).map(() => makeMat(baseTexture));
-    return mats;
+    // 6 faces share the same base texture; any required +90° correction is applied later per-face.
+    return Array(6).fill(null).map(() => makeMat(baseTexture));
   }
+
+  function __rotateMatTexture(mat, delta) {
+    if (!mat) return;
+    const tex = mat.map || mat.emissiveMap || null;
+    if (!tex) return;
+
+    // Canvas textures (lights) are rotated via shader uniform; base textures use texture clone.
+    const isCanvasTex =
+      !!tex.isCanvasTexture ||
+      (tex.image &&
+        (tex.image instanceof HTMLCanvasElement || tex.image?.tagName === "CANVAS"));
+
+    if (isCanvasTex) {
+      // For safety; base path should not reach here.
+      tex.center?.set(0.5, 0.5);
+      tex.rotation = (tex.rotation || 0) + delta;
+      tex.needsUpdate = true;
+      mat.needsUpdate = true;
+      return;
+    }
+
+    const t = tex.clone();
+    t.center.set(0.5, 0.5);
+    t.rotation = (tex.rotation || 0) + delta;
+    t.needsUpdate = true;
+
+    if (mat.map) mat.map = t;
+    if ("emissiveMap" in mat && mat.emissiveMap) mat.emissiveMap = t;
+    mat.needsUpdate = true;
+  }
+
 
   // -------------------------------
   // Lights (sprite-sheet -> canvas textures -> crossfade)
@@ -254,7 +363,7 @@ controls.enableDamping = true;
   // -------------------------------
   const W = 16, H = 16;
 
-  function mkCanvasTex(canvas) {
+  function mkCanvasTex(canvas, rotation) {
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = 8;
@@ -262,6 +371,11 @@ controls.enableDamping = true;
     tex.wrapT = THREE.ClampToEdgeWrapping;
     tex.magFilter = THREE.NearestFilter;
     tex.minFilter = THREE.NearestMipmapNearestFilter;
+
+    if (rotation != null) {
+      tex.center.set(0.5, 0.5);
+      tex.rotation = rotation;
+    }
     tex.needsUpdate = true;
     return tex;
   }
@@ -331,7 +445,7 @@ controls.enableDamping = true;
   const __LIGHT_SOURCE_CACHE = new Map();
 
   function __getLightSource(sheetUrl) {
-    const key = `${sheetUrl}`;
+    const key = sheetUrl;
     if (__LIGHT_SOURCE_CACHE.has(key)) return __LIGHT_SOURCE_CACHE.get(key);
 
     const canvasA = document.createElement("canvas");
@@ -342,26 +456,27 @@ controls.enableDamping = true;
     const ctxA = canvasA.getContext("2d");
     const ctxB = canvasB.getContext("2d");
 
-    const texA = mkCanvasTex(canvasA);
-    const texB = mkCanvasTex(canvasB);
+    const texA = mkCanvasTex(canvasA, null);
+    const texB = mkCanvasTex(canvasB, null);
+
     const sharedMixAlpha = { value: 0.0 };
 
     const matsVisible = [];
-    matsVisible[FACE_RIGHT] = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
-    matsVisible[FACE_LEFT]  = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
-    matsVisible[FACE_FRONT] = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
-    matsVisible[FACE_BACK]  = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
+    matsVisible[FACE_RIGHT]  = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
+    matsVisible[FACE_LEFT]   = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
     matsVisible[FACE_TOP]    = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
     matsVisible[FACE_BOTTOM] = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
+    matsVisible[FACE_FRONT]  = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
+    matsVisible[FACE_BACK]   = makeCrossfadeLightMat(texA, texB, sharedMixAlpha, 0.0);
 
     const faceMapA = [];
     const faceMapB = [];
-    faceMapA[FACE_RIGHT] = texA; faceMapB[FACE_RIGHT] = texB;
-    faceMapA[FACE_LEFT]  = texA; faceMapB[FACE_LEFT]  = texB;
-    faceMapA[FACE_FRONT] = texA; faceMapB[FACE_FRONT] = texB;
-    faceMapA[FACE_BACK]  = texA; faceMapB[FACE_BACK]  = texB;
+    faceMapA[FACE_RIGHT]  = texA; faceMapB[FACE_RIGHT]  = texB;
+    faceMapA[FACE_LEFT]   = texA; faceMapB[FACE_LEFT]   = texB;
     faceMapA[FACE_TOP]    = texA; faceMapB[FACE_TOP]    = texB;
     faceMapA[FACE_BOTTOM] = texA; faceMapB[FACE_BOTTOM] = texB;
+    faceMapA[FACE_FRONT]  = texA; faceMapB[FACE_FRONT]  = texB;
+    faceMapA[FACE_BACK]   = texA; faceMapB[FACE_BACK]   = texB;
 
     const invisible = new THREE.MeshStandardMaterial({
       transparent: true,
@@ -384,7 +499,7 @@ controls.enableDamping = true;
       faceMapA, faceMapB,
       invisible,
       sharedMixAlpha,
-      rotMats: new Map(),
+      rotMats: new Map(), // key: `${localFace}|${rotRadians}`
     };
 
     img.onload = () => {
@@ -407,18 +522,7 @@ controls.enableDamping = true;
     return source;
   }
 
-  
-  // Face-specific 7x7 numbering rotations (lights)
-  // SOUTH/ NORTH faces: number from (x,y) with top row = y=GRID_SIZE-1, left col = x=0
-  // TOP/ BOTTOM faces: number from (x,z) with top row = z=0 (04 side = north)
-  const __LIGHT_ROT90 = {
-    south: new Set([16, 20, 30, 34]),
-    north: new Set([16, 20, 30, 34]),
-    top:   new Set([11, 39]),
-    bottom:new Set([11, 39]),
-  };
-
-  function __numXY(x, y) {
+function __numXY(x, y) {
     const row = (GRID_SIZE - 1) - y; // y=6 => row0
     const col = x; // x=0 => col0
     return row * GRID_SIZE + col + 1;
@@ -446,26 +550,28 @@ controls.enableDamping = true;
     return false;
   }
 
-  function makeLightsLayer(sheetUrl, faceVisibleMask, x, y, z) {
+  function makeLightsLayer(sheetUrl, worldVisible, localToWorld, x, y, z) {
     const source = __getLightSource(sheetUrl);
 
-    const mats = Array(6);
-    for (let fi = 0; fi < 6; fi++) {
-      if (!(faceVisibleMask && faceVisibleMask[fi])) {
-        mats[fi] = source.invisible;
+    const mats = Array(6).fill(null);
+    for (let li = 0; li < 6; li++) {
+      const wf = localToWorld[li];
+
+      if (!worldVisible[wf]) {
+        mats[li] = source.invisible;
         continue;
       }
 
-      if (__needsLightRot90(fi, x, y, z)) {
-        const k = `fi:${fi}:rot90`;
+      if (__needsRot90World(wf, x, y, z)) {
+        const k = `${li}|${Math.PI / 2}`;
         if (!source.rotMats.has(k)) {
-          const mapA = source.faceMapA[fi];
-          const mapB = source.faceMapB[fi];
+          const mapA = source.faceMapA[li];
+          const mapB = source.faceMapB[li];
           source.rotMats.set(k, makeCrossfadeLightMat(mapA, mapB, source.sharedMixAlpha, Math.PI / 2));
         }
-        mats[fi] = source.rotMats.get(k);
+        mats[li] = source.rotMats.get(k);
       } else {
-        mats[fi] = source.matsVisible[fi];
+        mats[li] = source.matsVisible[li];
       }
     }
 
@@ -480,44 +586,45 @@ controls.enableDamping = true;
   // Build instances
   // -------------------------------
   function makeInstance(x, y, z) {
-    const type = classifyType(x, y, z);
+    const type0 = classifyType(x, y, z);
+    const type = type0 === "block" ? "block" : type0;
 
-    
+    // Determine group rotation (express column direction as mesh rotation).
+    let rx = 0, ry = 0;
+    if (type === "column_z") {
+      rx = Math.PI / 2;
+    } else if (type === "column_x") {
+      rx = Math.PI / 2;
+      ry = Math.PI / 2;
+    }
 
-    const faceMask = [
-      !hasBlock(x + 1, y, z), // RIGHT
-      !hasBlock(x - 1, y, z), // LEFT
-      !hasBlock(x, y + 1, z), // TOP
-      !hasBlock(x, y - 1, z), // BOTTOM
-      !hasBlock(x, y, z + 1), // FRONT (south)
-      !hasBlock(x, y, z - 1), // BACK (north)
-    ];
-const isColumn = type.startsWith("column");
-    const baseTex = isColumn ? texColumnBase : texBlockBase;
+    const localToWorld = __FACE_LOCAL_TO_WORLD[type] || __FACE_LOCAL_TO_WORLD.block;
+    const worldVisible = __worldVisibleMask(x, y, z);
+
+    // base materials (per local face, driven by WORLD visibility/corrections)
+    const baseTex = (type === "column_x" || type === "column_y" || type === "column_z")
+      ? texColumn
+      : texBlock;
 
     const baseMats = makeBaseMaterials(baseTex);
-
-    // base rotation correction (must match lights +90° rule)
-    for (let fi = 0; fi < 6; fi++) {
-      if (faceMask && faceMask[fi] && __needsLightRot90(fi, x, y, z)) {
-        const mat = baseMats[fi];
-        if (mat && mat.map) {
-          const t = mat.map.clone();
-          t.center.set(0.5, 0.5);
-          t.rotation = (t.rotation || 0) + (Math.PI / 2);
-          t.needsUpdate = true;
-          mat.map = t;
-          if (mat.emissiveMap) mat.emissiveMap = t;
-          mat.needsUpdate = true;
-        }
+    for (let li = 0; li < 6; li++) {
+      const wf = localToWorld[li];
+      if (!worldVisible[wf]) {
+        baseMats[li] = invisibleMat;
+        continue;
+      }
+      if (__needsRot90World(wf, x, y, z)) {
+        __rotateMatTexture(baseMats[li], Math.PI / 2);
       }
     }
     const baseMesh = new THREE.Mesh(baseGeo, baseMats);
 
     // lights
+    const isColumn = (type === "column_x" || type === "column_y" || type === "column_z");
     const sheetUrl = isColumn ? LIGHT_SHEET_COLUMN_URL : LIGHT_SHEET_BLOCK_URL;
-    const lights = makeLightsLayer(sheetUrl, faceMask, x, y, z);
-// inside overlay (only for inside)
+    const lights = makeLightsLayer(sheetUrl, worldVisible, localToWorld, x, y, z);
+
+    // inside overlay (only for inside)
     let insideMesh = null;
     if (type === "inside") {
       const parity = (Math.abs(x) + Math.abs(y) + Math.abs(z)) & 1;
@@ -535,15 +642,7 @@ const isColumn = type.startsWith("column");
     group.add(baseMesh, lights.mesh);
     if (insideMesh) group.add(insideMesh);
 
-    // AE2-like rotations for column variants (model orientation)
-    if (type === "column_z") {
-      group.rotation.x = Math.PI / 2;
-    } else if (type === "column_x") {
-      group.rotation.x = Math.PI / 2;
-      group.rotation.y = Math.PI / 2;
-    }
-    // column_y: no rotation
-
+    group.rotation.set(rx, ry, 0);
     group.position.set((x * SPACING) - OFFSET, (y * SPACING) - OFFSET, (z * SPACING) - OFFSET);
 
     return { x, y, z, type, group, lights };
@@ -615,6 +714,9 @@ instances.push(inst);
   function addWorldCompassLabels() {
     if (!instances.length) return;
 
+    // clear existing labels (idempotent)
+    while (compassGroup.children.length) compassGroup.remove(compassGroup.children[0]);
+
     const box = new THREE.Box3();
     for (const inst of instances) box.expandByObject(inst.group);
 
@@ -629,123 +731,6 @@ instances.push(inst);
 
     // place at mid-height, outside each side
     const y = center.y;
-
-    // ---- Rotation hotfix (block-wise, applied per 3×3 sub-cube) ----
-    // Same approach as the completed 3×3×3 demo:
-    // rotate the 4 'edge-center' blocks (x=mid within the 3×3, z=min/max, y=min/max) by +90°.
-    // Here, the pattern exists in 4 corners of the 7×7 grid: (0..2,0..2), (4..6,0..2), (0..2,4..6), (4..6,4..6).
-    const rotateMatTexture = (mat, delta) => {
-      if (!mat) return;
-
-      const tex = mat.map || mat.emissiveMap || null;
-      if (!tex) return;
-
-      const isCanvasTex =
-        !!tex.isCanvasTexture ||
-        (tex.image &&
-          (tex.image instanceof HTMLCanvasElement || tex.image?.tagName === "CANVAS"));
-
-      if (isCanvasTex) {
-        tex.center?.set(0.5, 0.5);
-        tex.rotation = (tex.rotation || 0) + delta;
-        tex.needsUpdate = true;
-        mat.needsUpdate = true;
-        return;
-      }
-
-      const base = tex;
-      const t = base.clone();
-      t.center.set(0.5, 0.5);
-      t.rotation = (base.rotation || 0) + delta;
-      t.needsUpdate = true;
-
-      if (mat.map) mat.map = t;
-      if ("emissiveMap" in mat && mat.emissiveMap) mat.emissiveMap = t;
-      mat.needsUpdate = true;
-    };
-
-    const rotateAllFacesInMesh = (mesh, delta) => {
-      if (!mesh || !mesh.material) return;
-
-      const seenCanvas = new Set();
-
-      const rotateOne = (mat) => {
-        if (!mat) return;
-        const tex = mat.map || mat.emissiveMap || null;
-        if (!tex) return;
-
-        const isCanvasTex =
-          !!tex.isCanvasTexture ||
-          (tex.image &&
-            (tex.image instanceof HTMLCanvasElement || tex.image?.tagName === "CANVAS"));
-
-        if (isCanvasTex) {
-          if (seenCanvas.has(tex)) return;
-          seenCanvas.add(tex);
-        }
-        rotateMatTexture(mat, delta);
-      };
-
-      if (Array.isArray(mesh.material) && mesh.material.length >= 6) {
-        for (let fi = 0; fi < 6; fi++) rotateOne(mesh.material[fi]);
-      } else {
-        rotateOne(mesh.material);
-      }
-    };
-
-    const rotateBlockTextures = (group, delta) => {
-      if (!group) return;
-      group.traverse((obj) => {
-        if (obj && obj.isMesh) rotateAllFacesInMesh(obj, delta);
-      });
-    };
-
-    const findInst = (x, y, z) =>
-      instances.find(
-        (i) =>
-          i &&
-          typeof i.x === "number" &&
-          typeof i.y === "number" &&
-          typeof i.z === "number" &&
-          Math.abs(i.x - x) < 1e-6 &&
-          Math.abs(i.y - y) < 1e-6 &&
-          Math.abs(i.z - z) < 1e-6
-      );
-
-    const Q = Math.PI / 2;
-
-    // 4 corner 3×3 sub-cubes in 7×7 grid
-    const corners = [
-      { x0: 0, z0: 0 },
-      { x0: 4, z0: 0 },
-      { x0: 0, z0: 4 },
-      { x0: 4, z0: 4 },
-    ];
-
-    const applyHotfixForYRange = (minY, maxY) => {
-      for (const c of corners) {
-        const midX = c.x0 + 1;
-        const minZ = c.z0;
-        const maxZ = c.z0 + 2;
-
-        const targets = [
-          { x: midX, y: maxY, z: minZ },
-          { x: midX, y: minY, z: minZ },
-          { x: midX, y: maxY, z: maxZ },
-          { x: midX, y: minY, z: maxZ },
-        ];
-
-        for (const t of targets) {
-          const inst = findInst(t.x, t.y, t.z);
-          if (inst) rotateBlockTextures(inst.group, Q);
-        }
-      }
-    };
-
-    // Top 3 layers (1..3): y=6,5,4
-    // applyHotfixForYRange(4, 6); // disabled: use explicit face-number rules instead
-    // Bottom 3 layers (5..7): y=2,1,0
-    // applyHotfixForYRange(0, 2); // disabled: use explicit face-number rules instead
 
     north.position.set(center.x, y, box.min.z - margin);
     south.position.set(center.x, y, box.max.z + margin);
