@@ -1108,11 +1108,14 @@ function stepLightSource(src, dt, speed=1.0){
     __uvMat.wireframe = WIREFRAME;
     const __faceColorMats = (MATERIAL_MODE === "faces") ? makeFaceColorMats() : null;
 
-    function __getRotTex(tex){
+    function __getRotTex(tex, rotQ){
       if (!tex) return tex;
-      if (__rotTexCache.has(tex)) return __rotTexCache.get(tex);
-      const t = rotateTextureQ(tex, rotQ);
-      __rotTexCache.set(tex, t);
+      const q = ((rotQ|0)%4+4)%4;
+      if (q === 0) return tex;
+      const k = `${tex.uuid}|${q}`;
+      if (__rotTexCache.has(k)) return __rotTexCache.get(k);
+      const t = rotateTextureQ(tex, q);
+      __rotTexCache.set(k, t);
       return t;
     }
 
@@ -1121,7 +1124,7 @@ function stepLightSource(src, dt, speed=1.0){
       if (MATERIAL_MODE === "faces") return __faceColorMats[faceIndex];
 
       const baseTex = typeToBaseTexture(type);
-      const useTex = rot90 ? __getRotTex(baseTex) : baseTex;
+      const useTex = __getRotTex(baseTex, rotQ);
       const key = `ae2|${type}|${rotQ}|${useTex?useTex.uuid:"null"}|wf=${WIREFRAME}`;
       if (__baseMatCache.has(key)) return __baseMatCache.get(key);
       const mat = baseMaterialFromTexture(useTex);
@@ -1139,9 +1142,9 @@ function stepLightSource(src, dt, speed=1.0){
       // so we can use a single mix material per type (+ optional rot90).
       let tA = src.texA;
       let tB = src.texB;
-      if (rot90){
-        tA = __getRotTex(tA);
-        tB = __getRotTex(tB);
+      if (rotQ !== 0){
+        tA = __getRotTex(tA, rotQ);
+        tB = __getRotTex(tB, rotQ);
       }
       const mat = makeMixMaterial(tA, tB, src.mixUniform);
       mat.wireframe = WIREFRAME;
