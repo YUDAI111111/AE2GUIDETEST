@@ -620,20 +620,19 @@ function makeLightSource(sheetUrl){
   return src;
 }
 
-function stepLightSource(src, dt, speed=1.0){
-  if (!src.ready || src.frames <= 1) return;
+function stepLightSource(src, globalFrame){
+  if (!src || !src.ready || src.frames <= 1) return;
 
-  // JAR-like animation: advance discrete frames. Keep it light-weight.
-  // Base interval: 0.20s per frame, scaled by speed.
-  const interval = 0.20 / Math.max(0.001, speed);
-  src._t += dt;
-  if (src._t < interval) return;
-  src._t = 0;
+  // Sync animation across all sheet types by using a single global frame index.
+  // This avoids phase offsets caused by differing image load timing.
+  const f = ((globalFrame % src.frames) + src.frames) % src.frames;
+  if ((src._aFrame|0) === f) return;
 
-  src._aFrame = (src._aFrame + 1) % src.frames;
+  src._aFrame = f;
   drawFrame(src.ctxA, src.img, src._aFrame, src.frameW, src.frameH);
   src.texA.needsUpdate = true;
 }
+
 
 // -----------------------------
 // Main
@@ -759,12 +758,13 @@ function stepLightSource(src, dt, speed=1.0){
   let ANIM_ENABLED = false;
   let WIREFRAME = false;
   let LABELS_ENABLED = false;
+  let __lightGlobalT = 0; // global lights timeline (sync across types)
   let MATERIAL_MODE = "ae2";  // "ae2" | "uv" | "faces"
 
   const cbPure = dbg.mkToggle("Pure AE2", PURE_AE2, (v)=>{ PURE_AE2=v; rebuildWorld();   if (ANIM_ENABLED) { __startAnimLoop(); } else { requestRender(); }
 });
   cbPure.disabled = true; // by design in clean rebuild; no legacy mode.
-  const cbLights = dbg.mkToggle("Lights", LIGHTS_ENABLED, (v)=>{ LIGHTS_ENABLED=v; rebuildWorld(); });
+  const cbLights = dbg.mkToggle("Lights", LIGHTS_ENABLED, (v)=>{ LIGHTS_ENABLED=v; __lightGlobalT=0; rebuildWorld(); requestRender(); if (ANIM_ENABLED && LIGHTS_ENABLED) { __startAnimLoop(); } });
   const cbAnim = dbg.mkToggle("Anim", ANIM_ENABLED, (v)=>{ ANIM_ENABLED = v; if (ANIM_ENABLED) { __startAnimLoop(); } else { __stopAnimLoop(); requestRender(); } });
   const cbWire = dbg.mkToggle("Wire", WIREFRAME, (v)=>{ WIREFRAME=v; rebuildWorld(); });
   const cbLabels = dbg.mkToggle("Labels", LABELS_ENABLED, (v)=>{ LABELS_ENABLED=v; rebuildWorld(); });
@@ -1431,11 +1431,13 @@ function stepLightSource(src, dt, speed=1.0){
     last = now;
 
     if (ANIM_ENABLED && LIGHTS_ENABLED){
-      // advance all light sheets
-      stepLightSource(lightSrcByType.block, dt, 1.0);
-      stepLightSource(lightSrcByType.column, dt, 1.0);
-      stepLightSource(lightSrcByType.inside_a, dt, 1.0);
-      stepLightSource(lightSrcByType.inside_b, dt, 1.0);
+      // advance all light sheets (globally synchronized)
+      __lightGlobalT += dt;
+      const __gFrame = Math.floor(__lightGlobalT / 0.20);
+      stepLightSource(lightSrcByType.block, __gFrame);
+      stepLightSource(lightSrcByType.column, __gFrame);
+      stepLightSource(lightSrcByType.inside_a, __gFrame);
+      stepLightSource(lightSrcByType.inside_b, __gFrame);
     }
     renderer.render(scene, camera);
   }
