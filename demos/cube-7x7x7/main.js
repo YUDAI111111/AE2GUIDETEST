@@ -264,6 +264,20 @@ function makeDebugUI(){
     return cb;
   };
 
+  // Pick highlight ON/OFF (default: OFF)
+  const __PICKHL_KEY = "cube7x7x7_pick_highlight";
+  let __pickHlOn = false;
+  try { __pickHlOn = (localStorage.getItem(__PICKHL_KEY) === "1"); } catch(e) {}
+  window.__PICK_HL_ENABLED = __pickHlOn;
+  mkToggle("Pick highlight", __pickHlOn, (on)=>{
+    window.__PICK_HL_ENABLED = !!on;
+    try { localStorage.setItem(__PICKHL_KEY, on ? "1" : "0"); } catch(e) {}
+    if (!on && typeof window.__forcePickHLHide === "function") window.__forcePickHLHide();
+    // render refresh
+    if (typeof requestRender === "function") requestRender();
+  });
+
+
   const mkSelect = (label, options, onChange)=>{
     const wrap = document.createElement("div");
     wrap.style.cssText = "display:flex;gap:8px;align-items:center;margin-top:6px";
@@ -677,6 +691,7 @@ function stepLightSource(src, globalFrame){
   const __pickHLGroup = new THREE.Group();
   __pickHLGroup.visible = false;
   scene.add(__pickHLGroup);
+  window.__forcePickHLHide = ()=>{ __pickHLGroup.visible = false; };
 
   const __pickHLBoxGeom = new THREE.EdgesGeometry(new THREE.BoxGeometry(1,1,1));
   const __pickHLBoxMat = new THREE.LineBasicMaterial({ transparent:true, opacity:0.95, depthTest:false, depthWrite:false });
@@ -691,6 +706,10 @@ function stepLightSource(src, globalFrame){
   __pickHLFace.renderOrder = 1000;
 
   function __updatePickHighlight(meta){
+    if (!window.__PICK_HL_ENABLED){
+      __pickHLGroup.visible = false;
+      return;
+    }
     if (!meta){
       __pickHLGroup.visible = false;
       return;
