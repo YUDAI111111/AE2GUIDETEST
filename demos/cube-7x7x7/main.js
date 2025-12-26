@@ -248,6 +248,7 @@ function makeDebugUI(){
   <div style="font-weight:600;margin-bottom:6px">Rotate (per block, per face)</div>
   <div id="rotSel" style="white-space:pre-wrap;color:rgba(255,255,255,0.9)">No selection</div>
   <div style="margin-top:6px;display:grid;grid-template-columns:auto 1fr;gap:6px;align-items:center">
+    <div>FACE</div><div><button id="rotFm">-90</button><button id="rotFp">+90</button> <span id="rqv"></span></div>
     <div>X</div><div><button id="rxm">-90</button><button id="rxp">+90</button> <span id="rxv"></span></div>
     <div>Y</div><div><button id="rym">-90</button><button id="ryp">+90</button> <span id="ryv"></span></div>
     <div>Z</div><div><button id="rzm">-90</button><button id="rzp">+90</button> <span id="rzv"></span></div>
@@ -261,6 +262,9 @@ function makeDebugUI(){
   root.appendChild(pickBox);
   const pickText = pickBox.querySelector("#pickText");
   const rotSel = pickBox.querySelector("#rotSel");
+  const rotFm = pickBox.querySelector("#rotFm");
+  const rotFp = pickBox.querySelector("#rotFp");
+  const rqv = pickBox.querySelector("#rqv");
   const rxm = pickBox.querySelector("#rxm");
   const rxp = pickBox.querySelector("#rxp");
   const rym = pickBox.querySelector("#rym");
@@ -322,7 +326,7 @@ function makeDebugUI(){
   }
 
 
-  return { root, mkToggle, mkSelect, pickText, texList, rotSel, rxm, rxp, rym, ryp, rzm, rzp, rxv, ryv, rzv, rotReset, rotCopy };
+  return { root, mkToggle, mkSelect, pickText, texList, rotSel, rotFm, rotFp, rqv, rxm, rxp, rym, ryp, rzm, rzp, rxv, ryv, rzv, rotReset, rotCopy };
 }
 
 // -----------------------------
@@ -660,12 +664,14 @@ function stepLightSource(src, dt, speed=1.0){
   scene.add(__pickHLGroup);
 
   const __pickHLBoxGeom = new THREE.EdgesGeometry(new THREE.BoxGeometry(1,1,1));
-  const __pickHLBoxMat = new THREE.LineBasicMaterial({ transparent:true, opacity:0.9 });
+  const __pickHLBoxMat = new THREE.LineBasicMaterial({ transparent:true, opacity:0.95, depthTest:false, depthWrite:false });
   const __pickHLBox = new THREE.LineSegments(__pickHLBoxGeom, __pickHLBoxMat);
   __pickHLGroup.add(__pickHLBox);
+  __pickHLBox.renderOrder = 999;
+  __pickHLFace.renderOrder = 1000;
 
   const __pickHLFaceGeom = new THREE.PlaneGeometry(1.02, 1.02);
-  const __pickHLFaceMat = new THREE.MeshBasicMaterial({ transparent:true, opacity:0.25, side:THREE.DoubleSide, depthTest:false });
+  const __pickHLFaceMat = new THREE.MeshBasicMaterial({ transparent:true, opacity:0.28, side:THREE.DoubleSide, depthTest:false, depthWrite:false });
   const __pickHLFace = new THREE.Mesh(__pickHLFaceGeom, __pickHLFaceMat);
   __pickHLGroup.add(__pickHLFace);
 
@@ -846,6 +852,13 @@ function stepLightSource(src, dt, speed=1.0){
         __saveRotDb();
         rebuildWorld();
         __refresh();
+      }
+
+      function __bumpFace(delta){
+        if (!pickInfo) return;
+        // Rotate texture around the selected face normal.
+        const axis = (pickInfo.face===0||pickInfo.face===1) ? "x" : (pickInfo.face===2||pickInfo.face===3) ? "y" : "z";
+        __bump(axis, delta);
       }
 
       dbg.rxm && dbg.rxm.addEventListener("click", ()=>__bump("x",-1));
