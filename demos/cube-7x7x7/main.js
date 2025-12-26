@@ -18,6 +18,31 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 // Utilities / constants
 // -----------------------------
 const GRID = 7;
+
+// UI visibility state (persisted)
+const __LSK_VIS = 'cube7x7x7_vis_v1';
+var __UI_SHOW_BLOCKS = true;
+var __UI_SHOW_LIGHTS = true;
+var __Y_LAYER_VIS = null; // boolean[GRID]
+function __loadVisState(){
+  try{
+    const raw = localStorage.getItem(__LSK_VIS);
+    if (!raw) return;
+    const o = JSON.parse(raw);
+    if (typeof o.blocks === 'boolean') __UI_SHOW_BLOCKS = o.blocks;
+    if (typeof o.lights === 'boolean') __UI_SHOW_LIGHTS = o.lights;
+    if (Array.isArray(o.y) && o.y.length === GRID){
+      __Y_LAYER_VIS = o.y.map(v=>!!v);
+    }
+  }catch(e){}
+}
+function __saveVisState(){
+  try{
+    const o = { blocks: __UI_SHOW_BLOCKS, lights: __UI_SHOW_LIGHTS, y: (__Y_LAYER_VIS||new Array(GRID).fill(true)) };
+    localStorage.setItem(__LSK_VIS, JSON.stringify(o));
+  }catch(e){}
+}
+
 const SPACING = 1.0;
 const OFFSET = (GRID - 1) * 0.5 * SPACING;
 
@@ -260,6 +285,41 @@ function makeDebugUI(){
 </div>
 `;
   root.appendChild(pickBox);
+
+  // Layer controls (Y slices + blocks/lights)
+  const layerBox = document.createElement("div");
+  layerBox.style.cssText = "margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.12);";
+  layerBox.innerHTML = `
+    <div style="font-weight:700;margin-bottom:6px">Layers</div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+      <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="visBlocks">Blocks</label>
+      <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="visLights">Lights</label>
+      <button id="yAll">Y All</button>
+      <button id="yNone">Y None</button>
+      <button id="yInv">Y Inv</button>
+    </div>
+    <div id="yChecks" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"></div>
+  `;
+  root.appendChild(layerBox);
+
+  // Build Y checkboxes
+  const yChecksWrap = layerBox.querySelector("#yChecks");
+  const yChecks = [];
+  for (let y=0; y<GRID; y++){
+    const lab = document.createElement("label");
+    lab.style.cssText = "display:flex;gap:6px;align-items:center";
+    lab.innerHTML = `<input type="checkbox" data-y="${y}">Y${y}`;
+    const cb = lab.querySelector("input");
+    yChecksWrap.appendChild(lab);
+    yChecks.push(cb);
+  }
+
+  const visBlocks = layerBox.querySelector("#visBlocks");
+  const visLights = layerBox.querySelector("#visLights");
+  const yAll = layerBox.querySelector("#yAll");
+  const yNone = layerBox.querySelector("#yNone");
+  const yInv = layerBox.querySelector("#yInv");
+
   const pickText = pickBox.querySelector("#pickText");
   const rotSel = pickBox.querySelector("#rotSel");
   const rotFm = pickBox.querySelector("#rotFm");
@@ -326,7 +386,7 @@ function makeDebugUI(){
   }
 
 
-  return { root, mkToggle, mkSelect, pickText, texList, rotSel, rotFm, rotFp, rqv, rxm, rxp, rym, ryp, rzm, rzp, rxv, ryv, rzv, rotReset, rotCopy };
+  return { root, mkToggle, mkSelect, pickText, texList, rotSel, rotFm, rotFp, rqv, rxm, rxp, rym, ryp, rzm, rzp, rxv, ryv, rzv, rotReset, rotCopy , layerBox, visBlocks, visLights, yChecks, yAll, yNone, yInv };
 }
 
 // -----------------------------
@@ -646,6 +706,9 @@ function stepLightSource(src, dt, speed=1.0){
 // Main
 // -----------------------------
 (async function main(){
+  __loadVisState();
+  if (!__Y_LAYER_VIS) __Y_LAYER_VIS = new Array(GRID).fill(true);
+
   var __renderRequested = false; // render request latch (var to avoid TDZ)
 
   // Basic page setup
@@ -654,6 +717,61 @@ function stepLightSource(src, dt, speed=1.0){
   document.body.style.background = "#000";
 
   const dbg = makeDebugUI();
+
+  // Layer UI wiring
+  function __syncLayerUI(){
+    if (!dbg || !dbg.visBlocks) return;
+    dbg.visBlocks.checked = !!__UI_SHOW_BLOCKS;
+    dbg.visLights.checked = !!__UI_SHOW_LIGHTS;
+    for (let y=0; y<GRID; y++){
+      if (__Y_LAYER_VIS && __Y_LAYER_VIS[y] === false) continue;
+      dbg.yChecks[y].checked = !!__Y_LAYER_VIS[y];
+    }
+  }
+
+  function __applyLayerChange(){
+    __saveVisState();
+    rebuildWorld();
+    requestRender && requestRender();
+  }
+
+  // blocks/lights toggles
+  dbg.visBlocks.addEventListener("change", ()=>{
+    __UI_SHOW_BLOCKS = !!dbg.visBlocks.checked;
+    __applyLayerChange();
+  });
+  dbg.visLights.addEventListener("change", ()=>{
+    __UI_SHOW_LIGHTS = !!dbg.visLights.checked;
+    __applyLayerChange();
+  });
+
+  // y slice toggles
+  dbg.yChecks.forEach((cb)=>{
+    cb.addEventListener("change", ()=>{
+      const y = Number(cb.getAttribute("data-y"));
+      __Y_LAYER_VIS[y] = !!cb.checked;
+      __applyLayerChange();
+    });
+  });
+
+  dbg.yAll.addEventListener("click", ()=>{
+    for (let y=0; y<GRID; y++) __Y_LAYER_VIS[y] = true;
+    __syncLayerUI();
+    __applyLayerChange();
+  });
+  dbg.yNone.addEventListener("click", ()=>{
+    for (let y=0; y<GRID; y++) __Y_LAYER_VIS[y] = false;
+    __syncLayerUI();
+    __applyLayerChange();
+  });
+  dbg.yInv.addEventListener("click", ()=>{
+    for (let y=0; y<GRID; y++) __Y_LAYER_VIS[y] = !__Y_LAYER_VIS[y];
+    __syncLayerUI();
+    __applyLayerChange();
+  });
+
+  __syncLayerUI();
+
   __loadRotDb();
 
   // Scene / camera / renderer
@@ -1227,6 +1345,7 @@ function stepLightSource(src, dt, speed=1.0){
     }
 
     function __lightMatFor(type, rotQ){
+      if (!__UI_SHOW_LIGHTS) return null;
       if (!(LIGHTS_ENABLED && MATERIAL_MODE === "ae2")) return null;
       const src = typeToLightSource(type);
       const key = `${src.url}|${rotQ}|wf=${WIREFRAME}`;
@@ -1295,6 +1414,7 @@ function stepLightSource(src, dt, speed=1.0){
     let facesCount = 0;
 
     for (let y=0; y<GRID; y++){
+      if (__Y_LAYER_VIS && __Y_LAYER_VIS[y] === false) continue;
       for (let z=0; z<GRID; z++){
         for (let x=0; x<GRID; x++){
           if (!placed.has(posKey(x,y,z))) continue;
@@ -1326,11 +1446,13 @@ function stepLightSource(src, dt, speed=1.0){
             const rotQ = __getRotQ(x,y,z,f);
             const baseMat = __baseMatFor(type, f, rotQ);
             __m.copy(__mBlock).multiply(__faceMat[f]);
-            __push(`B|${baseMat.uuid}`, faceGeom, baseMat, __m.clone(), { x,y,z,type, face:f, rx:e.x, ry:e.y, rz:e.z, worldDir:dir, rotQ: rotQ, rotXYZ: __getRotXYZ(x,y,z,f) });
-            facesCount++;
+            if (__UI_SHOW_BLOCKS){
+              __push(`B|${baseMat.uuid}`, faceGeom, baseMat, __m.clone ? __m.clone() : __m, { x,y,z,type, face:f, rx:e.x, ry:e.y, rz:e.z, worldDir:dir, rotQ: rotQ, rotXYZ: __getRotXYZ(x,y,z,f) });
+              facesCount++;
+            }
 
             const lightMat = __lightMatFor(type, rotQ);
-            if (lightMat){
+            if (__UI_SHOW_LIGHTS && lightMat){
               // Same transform; geometry is slightly offset to prevent z-fighting.
               __push(`L|${lightMat.uuid}`, faceGeomLight, lightMat, __m.clone(), { x,y,z,type, face:f, rx:e.x, ry:e.y, rz:e.z, worldDir:dir, rotQ: rotQ, rotXYZ: __getRotXYZ(x,y,z,f) });
             }
