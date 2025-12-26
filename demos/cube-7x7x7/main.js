@@ -667,13 +667,13 @@ function stepLightSource(src, dt, speed=1.0){
   const __pickHLBoxMat = new THREE.LineBasicMaterial({ transparent:true, opacity:0.95, depthTest:false, depthWrite:false });
   const __pickHLBox = new THREE.LineSegments(__pickHLBoxGeom, __pickHLBoxMat);
   __pickHLGroup.add(__pickHLBox);
-  __pickHLBox.renderOrder = 999;
-  __pickHLFace.renderOrder = 1000;
 
   const __pickHLFaceGeom = new THREE.PlaneGeometry(1.02, 1.02);
   const __pickHLFaceMat = new THREE.MeshBasicMaterial({ transparent:true, opacity:0.28, side:THREE.DoubleSide, depthTest:false, depthWrite:false });
   const __pickHLFace = new THREE.Mesh(__pickHLFaceGeom, __pickHLFaceMat);
   __pickHLGroup.add(__pickHLFace);
+  __pickHLBox.renderOrder = 999;
+  __pickHLFace.renderOrder = 1000;
 
   function __updatePickHighlight(meta){
     if (!meta){
