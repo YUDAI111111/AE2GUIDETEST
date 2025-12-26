@@ -1019,6 +1019,7 @@ function stepLightSource(src, globalFrame){
   }
 
   // UV test / Face colors
+  let uvTestTex = null;
   function makeUVTestTexture(){
     const c = document.createElement("canvas");
     c.width = 128;
@@ -1042,7 +1043,7 @@ function stepLightSource(src, globalFrame){
     return tex;
   }
 
-  const uvTestTex = makeUVTestTexture();
+  uvTestTex = makeUVTestTexture();
   const faceColorTex = (()=> {
     // not needed; we'll use per-face solid materials
     return null;
@@ -1208,6 +1209,7 @@ function stepLightSource(src, globalFrame){
     // Base: 6 materials, default same; apply special rot90 by cloning texture.
     let baseMats;
     if (MATERIAL_MODE === "uv"){
+    if (DEBUG_UV_TEST && !uvTestTex) uvTestTex = makeUVTestTexture();
       const mat = baseMaterialFromTexture(uvTestTex);
       baseMats = new Array(6).fill(mat);
     } else if (MATERIAL_MODE === "faces"){
