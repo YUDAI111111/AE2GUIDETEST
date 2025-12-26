@@ -1019,7 +1019,7 @@ function stepLightSource(src, globalFrame){
   }
 
   // UV test / Face colors
-  let uvTestTex = null;
+  var uvTestTex = null;
   function makeUVTestTexture(){
     const c = document.createElement("canvas");
     c.width = 128;
@@ -1043,7 +1043,7 @@ function stepLightSource(src, globalFrame){
     return tex;
   }
 
-  uvTestTex = makeUVTestTexture();
+  if (DEBUG_UV_TEST && !uvTestTex) uvTestTex = makeUVTestTexture();
   const faceColorTex = (()=> {
     // not needed; we'll use per-face solid materials
     return null;
