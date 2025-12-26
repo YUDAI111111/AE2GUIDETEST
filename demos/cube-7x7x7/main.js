@@ -1101,7 +1101,7 @@ function stepLightSource(src, dt, speed=1.0){
     // -----------------------------
     // Materials cache per rebuild
     // -----------------------------
-    const __rotTexCache = new WeakMap();
+    const __rotTexCache = new Map();
     const __baseMatCache = new Map();
     const __lightMatCache = new Map();
     const __uvMat = baseMaterialFromTexture(uvTestTex);
