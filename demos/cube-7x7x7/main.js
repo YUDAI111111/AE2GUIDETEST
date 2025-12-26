@@ -179,7 +179,7 @@ function safeNowMs(){ return (typeof performance !== "undefined" && performance.
 // -----------------------------
 function makeDebugUI(){
   const __DBG_KEY = "cube7x7x7_debug_hidden";
-  const __dbgHidden = (localStorage.getItem(__DBG_KEY) === "1");
+  const __dbgHidden = (localStorage.getItem(__DBG_KEY) !== "0"); // default: hidden
 
   const root = document.createElement("div");
   root.style.cssText = [
@@ -197,32 +197,52 @@ function makeDebugUI(){
   let __dbgDragActive = false;
   let __dbgDragDX = 0;
   let __dbgDragDY = 0;
-  title.addEventListener("pointerdown", (ev)=>{
-    if (ev.button !== 0) return;
-    ev.preventDefault();
-    const r = root.getBoundingClientRect();
-    // Switch from right-based to left-based positioning so it can move.
-    root.style.left = r.left + "px";
-    root.style.top = r.top + "px";
-    root.style.right = "auto";
-    root.style.bottom = "auto";
-    __dbgDragActive = true;
-    __dbgDragDX = ev.clientX - r.left;
-    __dbgDragDY = ev.clientY - r.top;
-    root.setPointerCapture(ev.pointerId);
-  });
-  title.addEventListener("pointermove", (ev)=>{
+
+  const __dbgMove = (ev)=>{
     if (!__dbgDragActive) return;
+    // Use current pointer/mouse position; works even without holding a button.
     const x = ev.clientX - __dbgDragDX;
     const y = ev.clientY - __dbgDragDY;
     root.style.left = Math.max(6, x) + "px";
     root.style.top = Math.max(6, y) + "px";
+  };
+
+  // Click-to-toggle drag (Windows-like: click once to "pick up", click again to "drop")
+  title.addEventListener("pointerdown", (ev)=>{
+    if (ev.button !== 0) return;
+    ev.preventDefault();
+
+    // Toggle
+    __dbgDragActive = !__dbgDragActive;
+
+    if (__dbgDragActive){
+      const r = root.getBoundingClientRect();
+      // Switch from right-based to left-based positioning so it can move.
+      root.style.left = r.left + "px";
+      root.style.top = r.top + "px";
+      root.style.right = "auto";
+      root.style.bottom = "auto";
+
+      __dbgDragDX = ev.clientX - r.left;
+      __dbgDragDY = ev.clientY - r.top;
+
+      title.style.cursor = "grabbing";
+      // Listen on window so it moves even when cursor leaves the title bar.
+      window.addEventListener("pointermove", __dbgMove, {passive:true});
+    }else{
+      title.style.cursor = "move";
+      window.removeEventListener("pointermove", __dbgMove, {passive:true});
+    }
   });
-  title.addEventListener("pointerup", (ev)=>{
+
+  // Also stop dragging if user clicks outside the debug window while dragging.
+  window.addEventListener("pointerdown", (ev)=>{
     if (!__dbgDragActive) return;
+    if (root.contains(ev.target)) return;
     __dbgDragActive = false;
-    try{ root.releasePointerCapture(ev.pointerId); }catch(e){}
-  });
+    title.style.cursor = "move";
+    window.removeEventListener("pointermove", __dbgMove, {passive:true});
+  }, {passive:true});
   title.style.cssText = "font-weight:700;margin-bottom:8px";
   root.appendChild(title);
 
@@ -754,8 +774,8 @@ function stepLightSource(src, globalFrame){
 
   // Settings (toggles)
   let PURE_AE2 = true;        // always true in this rebuild (kept for UI compatibility)
-  let LIGHTS_ENABLED = false;
-  let ANIM_ENABLED = false;
+  let LIGHTS_ENABLED = true;
+  let ANIM_ENABLED = true;
   let WIREFRAME = false;
   let LABELS_ENABLED = false;
   let __lightGlobalT = 0; // global lights timeline (sync across types)
@@ -764,8 +784,73 @@ function stepLightSource(src, globalFrame){
   const cbPure = dbg.mkToggle("Pure AE2", PURE_AE2, (v)=>{ PURE_AE2=v; rebuildWorld();   if (ANIM_ENABLED) { __startAnimLoop(); } else { requestRender(); }
 });
   cbPure.disabled = true; // by design in clean rebuild; no legacy mode.
-  const cbLights = dbg.mkToggle("Lights", LIGHTS_ENABLED, (v)=>{ LIGHTS_ENABLED=v; __lightGlobalT=0; rebuildWorld(); requestRender(); if (ANIM_ENABLED && LIGHTS_ENABLED) { __startAnimLoop(); } });
-  const cbAnim = dbg.mkToggle("Anim", ANIM_ENABLED, (v)=>{ ANIM_ENABLED = v; if (ANIM_ENABLED) { __startAnimLoop(); } else { __stopAnimLoop(); requestRender(); } });
+    // Power (Lights + Anim) unified and moved outside the debug panel
+  const __PWR_KEY = "cube7x7x7_power_on";
+  let __POWER_ON = true;
+  let __powerBtn = null;
+  const __setPower = (on, save=true)=>{
+    __POWER_ON = !!on;
+    LIGHTS_ENABLED = __POWER_ON;
+    ANIM_ENABLED = __POWER_ON;
+    if (save){
+      try{ localStorage.setItem(__PWR_KEY, __POWER_ON ? '1':'0'); }catch(e){}
+    }
+    if (__powerBtn){
+      __powerBtn.textContent = __POWER_ON ? '電源: ON' : '電源: OFF';
+      __powerBtn.dataset.on = __POWER_ON ? '1':'0';
+    }
+    rebuildWorld();
+    if (ANIM_ENABLED && LIGHTS_ENABLED) {
+      __startAnimLoop();
+    } else {
+      __stopAnimLoop();
+      requestRender();
+    }
+  };
+  const __makePowerWidget = ()=>{
+    let on = true;
+    try{
+      const s = localStorage.getItem(__PWR_KEY);
+      on = (s === null) ? true : (s === '1');
+    }catch(e){}
+    const box = document.createElement('div');
+    box.style.cssText = [
+      'position:fixed',
+      'left:10px',
+      'top:10px',
+      'z-index:99998',
+      'display:flex',
+      'gap:6px',
+      'align-items:center',
+      'padding:6px 8px',
+      'border-radius:10px',
+      'background:rgba(0,0,0,0.55)',
+      'border:1px solid rgba(255,255,255,0.18)',
+      'backdrop-filter: blur(4px)',
+      'font:12px/1.2 ui-monospace,Consolas,monospace',
+      'color:#eaeaea',
+      'user-select:none'
+    ].join(';');
+    const btn = document.createElement('button');
+    btn.style.cssText = [
+      'padding:6px 10px',
+      'border-radius:10px',
+      'border:1px solid rgba(255,255,255,0.25)',
+      'background:rgba(255,255,255,0.08)',
+      'color:#fff',
+      'cursor:pointer'
+    ].join(';');
+    btn.title = 'Lights + Anim';
+    btn.addEventListener('click', ()=>{ __setPower(!__POWER_ON); });
+    __powerBtn = btn;
+    box.appendChild(btn);
+    document.body.appendChild(box);
+    __setPower(on, false); // apply default, then persist on first user action
+    // Ensure default is ON (requested)
+    __setPower(true, (localStorage.getItem(__PWR_KEY) === null));
+  };
+  __makePowerWidget();
+
   const cbWire = dbg.mkToggle("Wire", WIREFRAME, (v)=>{ WIREFRAME=v; rebuildWorld(); });
   const cbLabels = dbg.mkToggle("Labels", LABELS_ENABLED, (v)=>{ LABELS_ENABLED=v; rebuildWorld(); });
 
