@@ -845,10 +845,13 @@ function stepLightSource(src, globalFrame){
     __powerBtn = btn;
     box.appendChild(btn);
     document.body.appendChild(box);
-    __setPower(on, false); // apply default, then persist on first user action
+      // Defer initial power application until after module initialization
+  setTimeout(()=>{
+    __setPower(on, false);
     // Ensure default is ON (requested)
     __setPower(true, (localStorage.getItem(__PWR_KEY) === null));
-  };
+  }, 0);
+};
   __makePowerWidget();
 
   const cbWire = dbg.mkToggle("Wire", WIREFRAME, (v)=>{ WIREFRAME=v; rebuildWorld(); });
