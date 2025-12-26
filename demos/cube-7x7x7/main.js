@@ -496,41 +496,18 @@ function makeMCBoxGeometry(size=1.0){
 // Light shader mix material factory
 // -----------------------------
 function makeMixMaterial(texA, texB, mixUniform){
-  // Additive overlay for lights: must never hide the base texture.
+  // JAR-like "lights" behavior: this is simply an animated light-pattern texture drawn on top.
+  // No additive glow / no shader crossfade. If the PNG has transparency, it will naturally overlay.
   const mat = new THREE.MeshBasicMaterial({
     map: texA,
     transparent: true,
     opacity: 1.0,
     depthWrite: false,
     side: THREE.DoubleSide,
-    blending: THREE.AdditiveBlending,
+    blending: THREE.NormalBlending,
+    alphaTest: 0.0,
   });
   mat.toneMapped = false;
-
-  mat.onBeforeCompile = (shader)=>{
-    shader.uniforms.mapB = { value: texB };
-    shader.uniforms.mixAlpha = mixUniform;
-
-    shader.fragmentShader = shader.fragmentShader.replace(
-      "#include <common>",
-      "#include <common>\nuniform sampler2D mapB;\nuniform float mixAlpha;\n"
-    );
-
-    shader.fragmentShader = shader.fragmentShader.replace(
-      "#include <map_fragment>",
-      `
-#ifdef USE_MAP
-  vec4 texelColorA = texture2D( map, vMapUv );
-  vec4 texelColorB = texture2D( mapB, vMapUv );
-  vec4 texelColor = mix(texelColorA, texelColorB, mixAlpha);
-  texelColor = mapTexelToLinear( texelColor );
-  float a = max(max(texelColor.r, texelColor.g), texelColor.b);
-  diffuseColor.rgb *= texelColor.rgb;
-  diffuseColor.a *= a;
-#endif
-      `
-    );
-  };
   return mat;
 }
 
@@ -645,21 +622,17 @@ function makeLightSource(sheetUrl){
 
 function stepLightSource(src, dt, speed=1.0){
   if (!src.ready || src.frames <= 1) return;
-  // Crossfade A -> B over 1.0s (scaled by speed). When completed, advance frames.
-  src._t += dt * speed;
-  const t = src._t;
-  const phase = t % 1.0;
-  src.mixUniform.value = phase;
 
-  if (t >= 1.0){
-    src._t = 0;
-    src._aFrame = src._bFrame;
-    src._bFrame = (src._bFrame + 1) % src.frames;
-    drawFrame(src.ctxA, src.img, src._aFrame, src.frameW, src.frameH);
-    drawFrame(src.ctxB, src.img, src._bFrame, src.frameW, src.frameH);
-    src.texA.needsUpdate = true;
-    src.texB.needsUpdate = true;
-  }
+  // JAR-like animation: advance discrete frames. Keep it light-weight.
+  // Base interval: 0.20s per frame, scaled by speed.
+  const interval = 0.20 / Math.max(0.001, speed);
+  src._t += dt;
+  if (src._t < interval) return;
+  src._t = 0;
+
+  src._aFrame = (src._aFrame + 1) % src.frames;
+  drawFrame(src.ctxA, src.img, src._aFrame, src.frameW, src.frameH);
+  src.texA.needsUpdate = true;
 }
 
 // -----------------------------
