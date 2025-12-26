@@ -18,31 +18,6 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 // Utilities / constants
 // -----------------------------
 const GRID = 7;
-
-// UI visibility state (persisted)
-const __LSK_VIS = 'cube7x7x7_vis_v1';
-var __UI_SHOW_BLOCKS = true;
-var __UI_SHOW_LIGHTS = true;
-var __Y_LAYER_VIS = null; // boolean[GRID]
-function __loadVisState(){
-  try{
-    const raw = localStorage.getItem(__LSK_VIS);
-    if (!raw) return;
-    const o = JSON.parse(raw);
-    if (typeof o.blocks === 'boolean') __UI_SHOW_BLOCKS = o.blocks;
-    if (typeof o.lights === 'boolean') __UI_SHOW_LIGHTS = o.lights;
-    if (Array.isArray(o.y) && o.y.length === GRID){
-      __Y_LAYER_VIS = o.y.map(v=>!!v);
-    }
-  }catch(e){}
-}
-function __saveVisState(){
-  try{
-    const o = { blocks: __UI_SHOW_BLOCKS, lights: __UI_SHOW_LIGHTS, y: (__Y_LAYER_VIS||new Array(GRID).fill(true)) };
-    localStorage.setItem(__LSK_VIS, JSON.stringify(o));
-  }catch(e){}
-}
-
 const SPACING = 1.0;
 const OFFSET = (GRID - 1) * 0.5 * SPACING;
 
@@ -71,19 +46,35 @@ function __dirName(dir){
 
 // Per-block per-face rotation overrides (quarter turns 0..3). Stored in localStorage.
 const __ROT_DB_KEY = "cube7x7x7_face_rot_db_v1";
+// Baseline (expected correct) face rotation database derived from user-verified fixes.
+const __BASELINE_FACE_ROT_DB = {"1,0,0|0":{rx:1,ry:0,rz:0},"1,0,0|1":{rx:1,ry:0,rz:0},"1,0,2|0":{rx:1,ry:0,rz:0},"1,0,2|1":{rx:1,ry:0,rz:0},"1,0,4|0":{rx:1,ry:0,rz:0},"1,0,4|1":{rx:1,ry:0,rz:0},"1,0,6|0":{rx:1,ry:0,rz:0},"1,0,6|1":{rx:1,ry:0,rz:0},"1,2,0|1":{rx:1,ry:0,rz:0},"1,2,2|1":{rx:1,ry:0,rz:0},"1,2,4|1":{rx:1,ry:0,rz:0},"1,2,6|1":{rx:1,ry:0,rz:0},"1,4,0|0":{rx:1,ry:0,rz:0},"1,4,2|0":{rx:1,ry:0,rz:0},"1,4,4|0":{rx:1,ry:0,rz:0},"1,4,6|0":{rx:1,ry:0,rz:0},"1,6,0|0":{rx:1,ry:0,rz:0},"1,6,0|1":{rx:1,ry:0,rz:0},"1,6,2|0":{rx:1,ry:0,rz:0},"1,6,2|1":{rx:1,ry:0,rz:0},"1,6,4|0":{rx:1,ry:0,rz:0},"1,6,4|1":{rx:1,ry:0,rz:0},"1,6,6|0":{rx:1,ry:0,rz:0},"1,6,6|1":{rx:1,ry:0,rz:0},"3,0,1|0":{rx:1,ry:0,rz:0},"3,0,1|1":{rx:1,ry:0,rz:0},"3,0,1|3":{rx:0,ry:2,rz:0},"3,0,5|0":{rx:1,ry:0,rz:0},"3,0,5|1":{rx:1,ry:0,rz:0},"3,0,5|3":{rx:0,ry:2,rz:0},"3,1,0|0":{rx:1,ry:0,rz:0},"3,1,0|1":{rx:1,ry:0,rz:0},"3,1,2|0":{rx:1,ry:0,rz:0},"3,1,2|1":{rx:1,ry:0,rz:0},"3,1,4|0":{rx:1,ry:0,rz:0},"3,1,4|1":{rx:1,ry:0,rz:0},"3,1,6|0":{rx:1,ry:0,rz:0},"3,1,6|1":{rx:1,ry:0,rz:0},"3,2,1|0":{rx:1,ry:0,rz:0},"3,2,1|1":{rx:1,ry:0,rz:0},"3,2,5|0":{rx:1,ry:0,rz:0},"3,2,5|1":{rx:1,ry:0,rz:0},"3,4,1|0":{rx:1,ry:0,rz:0},"3,4,1|1":{rx:1,ry:0,rz:0},"3,4,5|0":{rx:1,ry:0,rz:0},"3,4,5|1":{rx:1,ry:0,rz:0},"3,5,0|0":{rx:1,ry:0,rz:0},"3,5,0|1":{rx:1,ry:0,rz:0},"3,5,2|0":{rx:1,ry:0,rz:0},"3,5,2|1":{rx:1,ry:0,rz:0},"3,5,4|0":{rx:1,ry:0,rz:0},"3,5,4|1":{rx:1,ry:0,rz:0},"3,5,6|0":{rx:1,ry:0,rz:0},"3,6,1|0":{rx:1,ry:0,rz:0},"3,6,1|1":{rx:1,ry:0,rz:0},"3,6,1|2":{rx:0,ry:1,rz:0},"3,6,5|0":{rx:1,ry:0,rz:0},"3,6,5|1":{rx:1,ry:0,rz:0},"3,6,5|2":{rx:0,ry:1,rz:0},"4,0,1|4":{rx:2,ry:0,rz:0},"4,0,5|4":{rx:2,ry:1,rz:2},"5,0,0|0":{rx:1,ry:0,rz:0},"5,0,0|1":{rx:1,ry:0,rz:0},"5,0,2|0":{rx:1,ry:0,rz:0},"5,0,2|1":{rx:1,ry:0,rz:0},"5,0,4|0":{rx:1,ry:0,rz:0},"5,0,4|1":{rx:1,ry:0,rz:0},"5,0,6|0":{rx:1,ry:0,rz:0},"5,0,6|1":{rx:1,ry:0,rz:0},"5,2,0|1":{rx:1,ry:0,rz:0},"5,2,2|1":{rx:1,ry:0,rz:0},"5,2,4|1":{rx:1,ry:0,rz:0},"5,2,6|1":{rx:1,ry:0,rz:0},"5,4,0|0":{rx:1,ry:0,rz:0},"5,4,2|0":{rx:1,ry:0,rz:0},"5,4,4|0":{rx:1,ry:0,rz:0},"5,4,6|0":{rx:1,ry:0,rz:0},"5,6,0|0":{rx:1,ry:0,rz:0},"5,6,0|1":{rx:1,ry:0,rz:0},"5,6,2|0":{rx:1,ry:0,rz:0},"5,6,2|1":{rx:1,ry:0,rz:0},"5,6,4|0":{rx:1,ry:0,rz:0},"5,6,4|1":{rx:1,ry:0,rz:0},"5,6,6|0":{rx:1,ry:0,rz:0},"5,6,6|1":{rx:1,ry:0,rz:0}};
 const __faceRotDb = new Map(); // key "x,y,z|face" -> {rx,ry,rz}
 function __rk(x,y,z,face){ return `${x},${y},${z}|${face}`; }
 function __loadRotDb(){
+  // Always start from a clean map so baseline defaults apply deterministically.
+  __faceRotDb.clear();
+
+  // 1) Load user overrides (if any)
   try{
     const raw = localStorage.getItem(__ROT_DB_KEY);
-    if (!raw) return;
-    const obj = JSON.parse(raw);
-    for (const k of Object.keys(obj)){
-      const v = obj[k];
-      if (!v) continue;
-      __faceRotDb.set(k, { rx:(v.rx|0)&3, ry:(v.ry|0)&3, rz:(v.rz|0)&3 });
+    if (raw){
+      const obj = JSON.parse(raw);
+      for (const k of Object.keys(obj)){
+        const v = obj[k];
+        if (!v) continue;
+        __faceRotDb.set(k, { rx:(v.rx|0)&3, ry:(v.ry|0)&3, rz:(v.rz|0)&3 });
+      }
     }
   }catch(e){ console.warn("[rotDB] load failed", e); }
+
+  // 2) Apply baseline defaults for any missing keys (baseline is the intended default)
+  try{
+    for (const k of Object.keys(__BASELINE_FACE_ROT_DB)){
+      if (__faceRotDb.has(k)) continue;
+      const v = __BASELINE_FACE_ROT_DB[k];
+      __faceRotDb.set(k, { rx:(v.rx|0)&3, ry:(v.ry|0)&3, rz:(v.rz|0)&3 });
+    }
+  }catch(e){ console.warn("[rotDB] baseline apply failed", e); }
 }
 function __saveRotDb(){
   try{
@@ -93,6 +84,10 @@ function __saveRotDb(){
   }catch(e){ console.warn("[rotDB] save failed", e); }
 }
 function __defaultRotXYZ(x,y,z,face){
+  // Baseline (intended default) takes precedence over heuristic.
+  const bk = __rk(x,y,z,face);
+  const bv = __BASELINE_FACE_ROT_DB[bk];
+  if (bv) return { rx:(bv.rx|0)&3, ry:(bv.ry|0)&3, rz:(bv.rz|0)&3 };
   const r = { rx:0, ry:0, rz:0 };
   const q = needsRot90ForFace(x,y,z,face) ? 1 : 0;
   if (face===0||face===1) r.rx=q;
@@ -285,41 +280,6 @@ function makeDebugUI(){
 </div>
 `;
   root.appendChild(pickBox);
-
-  // Layer controls (Y slices + blocks/lights)
-  const layerBox = document.createElement("div");
-  layerBox.style.cssText = "margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.12);";
-  layerBox.innerHTML = `
-    <div style="font-weight:700;margin-bottom:6px">Layers</div>
-    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
-      <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="visBlocks">Blocks</label>
-      <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="visLights">Lights</label>
-      <button id="yAll">Y All</button>
-      <button id="yNone">Y None</button>
-      <button id="yInv">Y Inv</button>
-    </div>
-    <div id="yChecks" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"></div>
-  `;
-  root.appendChild(layerBox);
-
-  // Build Y checkboxes
-  const yChecksWrap = layerBox.querySelector("#yChecks");
-  const yChecks = [];
-  for (let y=0; y<GRID; y++){
-    const lab = document.createElement("label");
-    lab.style.cssText = "display:flex;gap:6px;align-items:center";
-    lab.innerHTML = `<input type="checkbox" data-y="${y}">Y${y}`;
-    const cb = lab.querySelector("input");
-    yChecksWrap.appendChild(lab);
-    yChecks.push(cb);
-  }
-
-  const visBlocks = layerBox.querySelector("#visBlocks");
-  const visLights = layerBox.querySelector("#visLights");
-  const yAll = layerBox.querySelector("#yAll");
-  const yNone = layerBox.querySelector("#yNone");
-  const yInv = layerBox.querySelector("#yInv");
-
   const pickText = pickBox.querySelector("#pickText");
   const rotSel = pickBox.querySelector("#rotSel");
   const rotFm = pickBox.querySelector("#rotFm");
@@ -386,7 +346,7 @@ function makeDebugUI(){
   }
 
 
-  return { root, mkToggle, mkSelect, pickText, texList, rotSel, rotFm, rotFp, rqv, rxm, rxp, rym, ryp, rzm, rzp, rxv, ryv, rzv, rotReset, rotCopy , layerBox, visBlocks, visLights, yChecks, yAll, yNone, yInv };
+  return { root, mkToggle, mkSelect, pickText, texList, rotSel, rotFm, rotFp, rqv, rxm, rxp, rym, ryp, rzm, rzp, rxv, ryv, rzv, rotReset, rotCopy };
 }
 
 // -----------------------------
@@ -706,9 +666,6 @@ function stepLightSource(src, dt, speed=1.0){
 // Main
 // -----------------------------
 (async function main(){
-  __loadVisState();
-  if (!__Y_LAYER_VIS) __Y_LAYER_VIS = new Array(GRID).fill(true);
-
   var __renderRequested = false; // render request latch (var to avoid TDZ)
 
   // Basic page setup
@@ -717,61 +674,6 @@ function stepLightSource(src, dt, speed=1.0){
   document.body.style.background = "#000";
 
   const dbg = makeDebugUI();
-
-  // Layer UI wiring
-  function __syncLayerUI(){
-    if (!dbg || !dbg.visBlocks) return;
-    dbg.visBlocks.checked = !!__UI_SHOW_BLOCKS;
-    dbg.visLights.checked = !!__UI_SHOW_LIGHTS;
-    for (let y=0; y<GRID; y++){
-      if (__Y_LAYER_VIS && __Y_LAYER_VIS[y] === false) continue;
-      dbg.yChecks[y].checked = !!__Y_LAYER_VIS[y];
-    }
-  }
-
-  function __applyLayerChange(){
-    __saveVisState();
-    rebuildWorld();
-    requestRender && requestRender();
-  }
-
-  // blocks/lights toggles
-  dbg.visBlocks.addEventListener("change", ()=>{
-    __UI_SHOW_BLOCKS = !!dbg.visBlocks.checked;
-    __applyLayerChange();
-  });
-  dbg.visLights.addEventListener("change", ()=>{
-    __UI_SHOW_LIGHTS = !!dbg.visLights.checked;
-    __applyLayerChange();
-  });
-
-  // y slice toggles
-  dbg.yChecks.forEach((cb)=>{
-    cb.addEventListener("change", ()=>{
-      const y = Number(cb.getAttribute("data-y"));
-      __Y_LAYER_VIS[y] = !!cb.checked;
-      __applyLayerChange();
-    });
-  });
-
-  dbg.yAll.addEventListener("click", ()=>{
-    for (let y=0; y<GRID; y++) __Y_LAYER_VIS[y] = true;
-    __syncLayerUI();
-    __applyLayerChange();
-  });
-  dbg.yNone.addEventListener("click", ()=>{
-    for (let y=0; y<GRID; y++) __Y_LAYER_VIS[y] = false;
-    __syncLayerUI();
-    __applyLayerChange();
-  });
-  dbg.yInv.addEventListener("click", ()=>{
-    for (let y=0; y<GRID; y++) __Y_LAYER_VIS[y] = !__Y_LAYER_VIS[y];
-    __syncLayerUI();
-    __applyLayerChange();
-  });
-
-  __syncLayerUI();
-
   __loadRotDb();
 
   // Scene / camera / renderer
@@ -1345,7 +1247,6 @@ function stepLightSource(src, dt, speed=1.0){
     }
 
     function __lightMatFor(type, rotQ){
-      if (!__UI_SHOW_LIGHTS) return null;
       if (!(LIGHTS_ENABLED && MATERIAL_MODE === "ae2")) return null;
       const src = typeToLightSource(type);
       const key = `${src.url}|${rotQ}|wf=${WIREFRAME}`;
@@ -1414,7 +1315,6 @@ function stepLightSource(src, dt, speed=1.0){
     let facesCount = 0;
 
     for (let y=0; y<GRID; y++){
-      if (__Y_LAYER_VIS && __Y_LAYER_VIS[y] === false) continue;
       for (let z=0; z<GRID; z++){
         for (let x=0; x<GRID; x++){
           if (!placed.has(posKey(x,y,z))) continue;
@@ -1446,13 +1346,11 @@ function stepLightSource(src, dt, speed=1.0){
             const rotQ = __getRotQ(x,y,z,f);
             const baseMat = __baseMatFor(type, f, rotQ);
             __m.copy(__mBlock).multiply(__faceMat[f]);
-            if (__UI_SHOW_BLOCKS){
-              __push(`B|${baseMat.uuid}`, faceGeom, baseMat, __m.clone ? __m.clone() : __m, { x,y,z,type, face:f, rx:e.x, ry:e.y, rz:e.z, worldDir:dir, rotQ: rotQ, rotXYZ: __getRotXYZ(x,y,z,f) });
-              facesCount++;
-            }
+            __push(`B|${baseMat.uuid}`, faceGeom, baseMat, __m.clone(), { x,y,z,type, face:f, rx:e.x, ry:e.y, rz:e.z, worldDir:dir, rotQ: rotQ, rotXYZ: __getRotXYZ(x,y,z,f) });
+            facesCount++;
 
             const lightMat = __lightMatFor(type, rotQ);
-            if (__UI_SHOW_LIGHTS && lightMat){
+            if (lightMat){
               // Same transform; geometry is slightly offset to prevent z-fighting.
               __push(`L|${lightMat.uuid}`, faceGeomLight, lightMat, __m.clone(), { x,y,z,type, face:f, rx:e.x, ry:e.y, rz:e.z, worldDir:dir, rotQ: rotQ, rotXYZ: __getRotXYZ(x,y,z,f) });
             }
