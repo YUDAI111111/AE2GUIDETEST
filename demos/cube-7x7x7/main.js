@@ -173,6 +173,36 @@ function makeDebugUI(){
 
   const title = document.createElement("div");
   title.textContent = "cube-7x7x7 DEBUG";
+  title.style.cursor = "move";
+  let __dbgDragActive = false;
+  let __dbgDragDX = 0;
+  let __dbgDragDY = 0;
+  title.addEventListener("pointerdown", (ev)=>{
+    if (ev.button !== 0) return;
+    ev.preventDefault();
+    const r = root.getBoundingClientRect();
+    // Switch from right-based to left-based positioning so it can move.
+    root.style.left = r.left + "px";
+    root.style.top = r.top + "px";
+    root.style.right = "auto";
+    root.style.bottom = "auto";
+    __dbgDragActive = true;
+    __dbgDragDX = ev.clientX - r.left;
+    __dbgDragDY = ev.clientY - r.top;
+    root.setPointerCapture(ev.pointerId);
+  });
+  title.addEventListener("pointermove", (ev)=>{
+    if (!__dbgDragActive) return;
+    const x = ev.clientX - __dbgDragDX;
+    const y = ev.clientY - __dbgDragDY;
+    root.style.left = Math.max(6, x) + "px";
+    root.style.top = Math.max(6, y) + "px";
+  });
+  title.addEventListener("pointerup", (ev)=>{
+    if (!__dbgDragActive) return;
+    __dbgDragActive = false;
+    try{ root.releasePointerCapture(ev.pointerId); }catch(e){}
+  });
   title.style.cssText = "font-weight:700;margin-bottom:8px";
   root.appendChild(title);
 
@@ -624,6 +654,41 @@ function stepLightSource(src, dt, speed=1.0){
 
   // Scene / camera / renderer
   const scene = new THREE.Scene();
+  // Pick highlight (block outline + selected face)
+  const __pickHLGroup = new THREE.Group();
+  __pickHLGroup.visible = false;
+  scene.add(__pickHLGroup);
+
+  const __pickHLBoxGeom = new THREE.EdgesGeometry(new THREE.BoxGeometry(1,1,1));
+  const __pickHLBoxMat = new THREE.LineBasicMaterial({ transparent:true, opacity:0.9 });
+  const __pickHLBox = new THREE.LineSegments(__pickHLBoxGeom, __pickHLBoxMat);
+  __pickHLGroup.add(__pickHLBox);
+
+  const __pickHLFaceGeom = new THREE.PlaneGeometry(1.02, 1.02);
+  const __pickHLFaceMat = new THREE.MeshBasicMaterial({ transparent:true, opacity:0.25, side:THREE.DoubleSide, depthTest:false });
+  const __pickHLFace = new THREE.Mesh(__pickHLFaceGeom, __pickHLFaceMat);
+  __pickHLGroup.add(__pickHLFace);
+
+  function __updatePickHighlight(meta){
+    if (!meta){
+      __pickHLGroup.visible = false;
+      return;
+    }
+    const pos = new THREE.Vector3((meta.x*SPACING)-OFFSET, (meta.y*SPACING)-OFFSET, (meta.z*SPACING)-OFFSET);
+    __pickHLGroup.position.copy(pos);
+
+    // Face plane orientation uses WORLD direction (after block rotation)
+    const d = meta.worldDir || [0,0,1];
+    const nx = d[0], ny = d[1], nz = d[2];
+    // normal -> quaternion
+    const n = new THREE.Vector3(nx,ny,nz).normalize();
+    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,1), n);
+    __pickHLFace.quaternion.copy(q);
+    __pickHLFace.position.set(0,0,0).add(n.multiplyScalar(0.51));
+
+    __pickHLGroup.visible = true;
+  }
+
   scene.background = new THREE.Color(0x070707);
 
   const camera = new THREE.PerspectiveCamera(55, window.innerWidth/window.innerHeight, 0.1, 1000);
@@ -725,17 +790,22 @@ function stepLightSource(src, dt, speed=1.0){
     if (!hit){
       pickInfo = null;
       dbg.pickText.textContent = "Pick: none";
+      __updatePickHighlight && __updatePickHighlight(null);
       return;
     }
     const meta = hit.object.userData.instanceMeta[hit.instanceId];
     if (!meta){
       pickInfo = null;
       dbg.pickText.textContent = "Pick: none";
+      __updatePickHighlight && __updatePickHighlight(null);
       return;
     }
     pickInfo = meta;
+    __updatePickHighlight && __updatePickHighlight(pickInfo);
     const wd = meta.worldDir ? ` worldDir=(${meta.worldDir[0]},${meta.worldDir[1]},${meta.worldDir[2]})` : "";
-    dbg.pickText.textContent = `Pick: (${meta.x},${meta.y},${meta.z}) type=${meta.type} localFace=${meta.face}${wd} rot=(${meta.rx.toFixed(2)},${meta.ry.toFixed(2)},${meta.rz.toFixed(2)})`;
+    const localName = __FACE_NAME_BY_INDEX[meta.face] || `face${meta.face}`;
+    const worldName = __dirName(meta.worldDir);
+    dbg.pickText.textContent = `Pick: (${meta.x},${meta.y},${meta.z}) type=${meta.type} localFace=${meta.face} ${localName} world=${worldName} blockRot=(${meta.rx.toFixed(2)},${meta.ry.toFixed(2)},${meta.rz.toFixed(2)}) texRotQ=${meta.rotQ}`;
     console.log("[PICK]", meta);
     function __updateRotUI(sel){
       if (!dbg.rotSel) return;
@@ -754,7 +824,65 @@ function stepLightSource(src, dt, speed=1.0){
       dbg.ryv.textContent = `${r.ry} (${r.ry*90}°)`;
       dbg.rzv.textContent = `${r.rz} (${r.rz*90}°)`;
     }
-    __updateRotUI(pickInfo);
+    
+    // Wire rotation buttons once (they operate on current pickInfo)
+    if (!window.__rotUiWired){
+      window.__rotUiWired = true;
+
+      function __refresh(){
+        __updateRotUI(pickInfo);
+        __updatePickHighlight && __updatePickHighlight(pickInfo);
+      }
+
+      function __bump(axis, delta){
+        if (!pickInfo) return;
+        const k = __rk(pickInfo.x, pickInfo.y, pickInfo.z, pickInfo.face);
+        const cur = __getRotXYZ(pickInfo.x, pickInfo.y, pickInfo.z, pickInfo.face);
+        const next = { rx:cur.rx, ry:cur.ry, rz:cur.rz };
+        if (axis==="x") next.rx = (next.rx + delta) & 3;
+        if (axis==="y") next.ry = (next.ry + delta) & 3;
+        if (axis==="z") next.rz = (next.rz + delta) & 3;
+        __faceRotDb.set(k, next);
+        __saveRotDb();
+        rebuildWorld();
+        __refresh();
+      }
+
+      dbg.rxm && dbg.rxm.addEventListener("click", ()=>__bump("x",-1));
+      dbg.rxp && dbg.rxp.addEventListener("click", ()=>__bump("x", 1));
+      dbg.rym && dbg.rym.addEventListener("click", ()=>__bump("y",-1));
+      dbg.ryp && dbg.ryp.addEventListener("click", ()=>__bump("y", 1));
+      dbg.rzm && dbg.rzm.addEventListener("click", ()=>__bump("z",-1));
+      dbg.rzp && dbg.rzp.addEventListener("click", ()=>__bump("z", 1));
+
+      dbg.rotReset && dbg.rotReset.addEventListener("click", ()=>{
+        if (!pickInfo) return;
+        const k = __rk(pickInfo.x, pickInfo.y, pickInfo.z, pickInfo.face);
+        __faceRotDb.set(k, __defaultRotXYZ(pickInfo.x, pickInfo.y, pickInfo.z, pickInfo.face));
+        __saveRotDb();
+        rebuildWorld();
+        __refresh();
+      });
+
+      dbg.rotCopy && dbg.rotCopy.addEventListener("click", async ()=>{
+        if (!pickInfo) return;
+        const r = __getRotXYZ(pickInfo.x, pickInfo.y, pickInfo.z, pickInfo.face);
+        const line =
+          `(${pickInfo.x},${pickInfo.y},${pickInfo.z})` +
+          ` localFace=${pickInfo.face} ${__FACE_NAME_BY_INDEX[pickInfo.face]||""}` +
+          ` world=${__dirName(pickInfo.worldDir)}` +
+          ` rotXYZ_quarters={x:${r.rx},y:${r.ry},z:${r.rz}}` +
+          ` rotQ(face)=${__getRotQ(pickInfo.x,pickInfo.y,pickInfo.z,pickInfo.face)}`;
+        try{
+          await navigator.clipboard.writeText(line);
+        }catch(e){
+          console.log("[COPY]", line);
+        }
+      });
+
+      // Ensure highlight reacts to selection changes
+      __refresh();
+    }
 
   });
 
