@@ -502,14 +502,6 @@ function rotateTextureQ(tex, q){
   return t;
 }
 
-function rotateTextureQ(tex, rotQ){
-  // Clone and apply +90° rotation around center (0.5,0.5)
-  const t = tex.clone();
-  t.center.set(0.5,0.5);
-  t.rotation = ROT_90;
-  t.needsUpdate = true;
-  return t;
-}
 
 
 
