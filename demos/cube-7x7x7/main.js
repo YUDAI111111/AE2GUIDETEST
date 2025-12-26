@@ -14,6 +14,9 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
+// Debug: UV test texture toggle (default OFF). Kept for diagnostics.
+var DEBUG_UV_TEST = false;
+
 // -----------------------------
 // Utilities / constants
 // -----------------------------
